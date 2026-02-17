@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Code Mobile Editor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { 
+            width: 100%; height: 100%;
+            background: #0d1117;
+            color: #e6edf3;
+            font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+            font-size: 14px;
+            overflow: hidden;
+        }
+        #editor-container {
+            width: 100%; height: 100%;
+        }
+        /* CodeMirror 6 will be loaded here via editor.bundle.js */
+        /* Placeholder styling for when the bundle isn't built yet */
+        .placeholder {
+            padding: 16px;
+            color: #8b949e;
+            font-style: italic;
+        }
+        .cm-editor { height: 100%; }
+        .cm-scroller { overflow: auto; }
+        
+        /* Dark theme overrides */
+        .cm-editor .cm-gutters {
+            background: #161b22;
+            border-right: 1px solid #21262d;
+            color: #484f58;
+        }
+        .cm-editor .cm-activeLineGutter {
+            background: #1f2428;
+        }
+        .cm-editor .cm-activeLine {
+            background: rgba(56, 139, 253, 0.1);
+        }
+        
+        /* Diff colors */
+        .cm-changedLine { background: rgba(56, 139, 253, 0.1); }
+        .cm-insertedLine { background: rgba(46, 160, 67, 0.15); }
+        .cm-deletedLine { background: rgba(248, 81, 73, 0.15); }
+        .cm-changedText { background: rgba(56, 139, 253, 0.3); }
+        .cm-insertedText { background: rgba(46, 160, 67, 0.4); }
+        .cm-deletedText { background: rgba(248, 81, 73, 0.4); }
+    </style>
+</head>
+<body>
+    <div id="editor-container">
+        <div class="placeholder">
+            Editor loading... 
+            <br><br>
+            The CodeMirror 6 bundle (editor.bundle.js) needs to be built.
+            <br>
+            Run: cd editor-bundle && npm install && npm run build
+        </div>
+    </div>
+
+    <!-- CodeMirror 6 bundle - to be built from editor-bundle/ -->
+    <script src="editor.bundle.js" onerror="console.log('editor.bundle.js not found - using placeholder')"></script>
+
+    <script>
+        // Editor API exposed to Kotlin via evaluateJavascript()
+        window.editor = {
+            _view: null,
+            _diffView: null,
+            _content: '',
+            _readOnly: false,
+
+            /**
+             * Open a file with content and language.
+             */
+            openFile: function(path, content, language) {
+                this._content = content;
+                // If CodeMirror is loaded, use it
+                if (typeof createEditor === 'function') {
+                    this._view = createEditor(
+                        document.getElementById('editor-container'),
+                        content,
+                        language,
+                        this._readOnly
+                    );
+                } else {
+                    // Fallback: show as pre-formatted text
+                    var container = document.getElementById('editor-container');
+                    container.innerHTML = '<pre style="padding:16px;white-space:pre-wrap;word-wrap:break-word;overflow:auto;height:100%;color:#e6edf3">' + 
+                        this._escapeHtml(content) + '</pre>';
+                }
+            },
+
+            /**
+             * Show a diff between original and modified content.
+             */
+            showDiff: function(original, modified, filePath) {
+                if (typeof createDiffView === 'function') {
+                    this._diffView = createDiffView(
+                        document.getElementById('editor-container'),
+                        original,
+                        modified
+                    );
+                } else {
+                    // Fallback: simple side-by-side text
+                    var container = document.getElementById('editor-container');
+                    container.innerHTML = 
+                        '<div style="display:flex;height:100%">' +
+                        '<pre style="flex:1;padding:12px;background:#1a0505;overflow:auto;border-right:1px solid #30363d;color:#f87171">' + 
+                        this._escapeHtml(original) + '</pre>' +
+                        '<pre style="flex:1;padding:12px;background:#05120a;overflow:auto;color:#34d399">' + 
+                        this._escapeHtml(modified) + '</pre>' +
+                        '</div>';
+                }
+            },
+
+            /**
+             * Get current editor content.
+             */
+            getContent: function() {
+                if (this._view && typeof getEditorContent === 'function') {
+                    return getEditorContent(this._view);
+                }
+                return this._content;
+            },
+
+            /**
+             * Set read-only mode.
+             */
+            setReadOnly: function(readOnly) {
+                this._readOnly = readOnly;
+                if (this._view && typeof setEditorReadOnly === 'function') {
+                    setEditorReadOnly(this._view, readOnly);
+                }
+            },
+
+            /**
+             * Set theme (dark/light).
+             */
+            setTheme: function(theme) {
+                document.body.style.background = theme === 'dark' ? '#0d1117' : '#ffffff';
+                document.body.style.color = theme === 'dark' ? '#e6edf3' : '#1a1a1a';
+                if (this._view && typeof setEditorTheme === 'function') {
+                    setEditorTheme(this._view, theme);
+                }
+            },
+
+            /**
+             * Scroll to a specific line.
+             */
+            scrollToLine: function(line) {
+                if (this._view && typeof scrollEditorToLine === 'function') {
+                    scrollEditorToLine(this._view, line);
+                }
+            },
+
+            /**
+             * Clear the editor.
+             */
+            clear: function() {
+                this._content = '';
+                var container = document.getElementById('editor-container');
+                container.innerHTML = '<div class="placeholder">No file open</div>';
+            },
+
+            /** Util: escape HTML */
+            _escapeHtml: function(text) {
+                var div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        };
+
+        // Notify Kotlin that the editor is ready
+        if (window.AndroidBridge) {
+            window.AndroidBridge.onEditorReady();
+        }
+    </script>
+</body>
+</html>
