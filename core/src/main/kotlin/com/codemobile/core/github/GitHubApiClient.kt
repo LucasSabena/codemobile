@@ -35,9 +35,9 @@ class GitHubApiClient @Inject constructor(
 
             val obj = gson.fromJson(body, JsonObject::class.java)
             GitHubUser(
-                login = obj.get("login")?.asString.orEmpty(),
-                name = obj.get("name")?.asString,
-                avatarUrl = obj.get("avatar_url")?.asString
+                login = obj.getStr("login").orEmpty(),
+                name = obj.getStr("name"),
+                avatarUrl = obj.getStr("avatar_url")
             )
         }
     }
@@ -61,22 +61,28 @@ class GitHubApiClient @Inject constructor(
             array.mapNotNull { element ->
                 val obj = element.asJsonObject
                 val id = obj.get("id")?.asLong ?: return@mapNotNull null
-                val name = obj.get("name")?.asString ?: return@mapNotNull null
-                val fullName = obj.get("full_name")?.asString ?: name
-                val htmlUrl = obj.get("html_url")?.asString.orEmpty()
-                val cloneUrl = obj.get("clone_url")?.asString.orEmpty()
+                val name = obj.getStr("name") ?: return@mapNotNull null
+                val fullName = obj.getStr("full_name") ?: name
+                val htmlUrl = obj.getStr("html_url").orEmpty()
+                val cloneUrl = obj.getStr("clone_url").orEmpty()
                 GitHubRepo(
                     id = id,
                     name = name,
                     fullName = fullName,
                     htmlUrl = htmlUrl,
                     cloneUrl = cloneUrl,
-                    description = obj.get("description")?.asString,
+                    description = obj.getStr("description"),
                     isPrivate = obj.get("private")?.asBoolean ?: false,
-                    updatedAt = obj.get("updated_at")?.asString
+                    updatedAt = obj.getStr("updated_at")
                 )
             }
         }
+    }
+
+    /** Safe accessor: returns null for missing keys AND JsonNull values */
+    private fun JsonObject.getStr(key: String): String? {
+        val el = get(key) ?: return null
+        return if (el.isJsonNull) null else el.asString
     }
 
     private companion object {
