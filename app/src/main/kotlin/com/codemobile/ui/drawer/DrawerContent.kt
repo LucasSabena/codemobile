@@ -187,8 +187,11 @@ fun AppDrawerContent(
             uiState = uiState,
             onDismiss = { showNewProjectDialog = false },
             onCreateLocal = { name, path ->
-                viewModel.createProject(name, path)
-                showNewProjectDialog = false
+                viewModel.createProjectAndSession(name, path) { sessionId ->
+                    showNewProjectDialog = false
+                    onSessionClick(sessionId)
+                    onCloseDrawer()
+                }
             },
             onConnectGitHub = { viewModel.connectGitHub() },
             onConnectGitHubWithToken = { viewModel.connectGitHubWithToken(it) },

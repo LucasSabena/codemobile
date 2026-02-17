@@ -4,6 +4,8 @@ package com.codemobile.ui.navigation
  * Navigation routes for Code Mobile.
  */
 sealed class Route(val route: String) {
+    data object Home : Route("home")
+
     data object Chat : Route("chat/{sessionId}") {
         fun createRoute(sessionId: String) = "chat/$sessionId"
     }

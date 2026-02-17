@@ -10,6 +10,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.codemobile.core.model.ThemeMode
 import com.codemobile.ui.chat.ChatScreen
+import com.codemobile.ui.home.HomeScreen
 import com.codemobile.ui.provider.ConnectProviderScreen
 import com.codemobile.ui.provider.ProviderAuthScreen
 import com.codemobile.ui.provider.ProviderViewModel
@@ -29,10 +30,20 @@ fun CodeMobileNavGraph(
         startDestination = if (startSessionId != null) {
             Route.Chat.createRoute(startSessionId)
         } else {
-            Route.Chat.createRoute("none")
+            Route.Home.route
         },
         modifier = modifier
     ) {
+        composable(route = Route.Home.route) {
+            HomeScreen(
+                onSessionClick = { sessionId ->
+                    navController.navigate(Route.Chat.createRoute(sessionId)) {
+                        launchSingleTop = true
+                    }
+                }
+            )
+        }
+
         composable(
             route = Route.Chat.route,
             arguments = listOf(

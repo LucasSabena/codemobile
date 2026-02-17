@@ -108,15 +108,25 @@ class DrawerViewModel @Inject constructor(
         }
     }
 
-    fun createProject(name: String, path: String) {
+    fun createProjectAndSession(
+        name: String,
+        path: String,
+        onSessionCreated: (String) -> Unit = {}
+    ) {
         viewModelScope.launch {
-            projectRepository.create(name, path)
+            val project = projectRepository.create(name, path)
+            val session = sessionRepository.create(projectId = project.id)
+            onSessionCreated(session.id)
         }
     }
 
-    fun createSession(projectId: String) {
+    fun createSession(
+        projectId: String,
+        onSessionCreated: (String) -> Unit = {}
+    ) {
         viewModelScope.launch {
-            sessionRepository.create(projectId = projectId)
+            val session = sessionRepository.create(projectId = projectId)
+            onSessionCreated(session.id)
         }
     }
 

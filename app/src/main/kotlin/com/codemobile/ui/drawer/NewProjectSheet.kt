@@ -1,5 +1,9 @@
 package com.codemobile.ui.drawer
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,12 +24,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
+enum class DialogMode {
+    NEW_PROJECT,
+    IMPORT_GITHUB
+}
+
 @Composable
 fun NewProjectDialog(
+    mode: DialogMode = DialogMode.NEW_PROJECT,
     uiState: DrawerUiState,
     onDismiss: () -> Unit,
     onCreateLocal: (String, String) -> Unit,
@@ -36,15 +47,41 @@ fun NewProjectDialog(
     onCloneRepo: (String, String?) -> Unit,
     onResetCloneState: () -> Unit
 ) {
+    val context = LocalContext.current
     var projectName by remember { mutableStateOf("") }
     var projectPath by remember { mutableStateOf("") }
+    var selectedProjectUri by remember { mutableStateOf<Uri?>(null) }
     var token by remember { mutableStateOf("") }
     var cloneUrl by remember { mutableStateOf("") }
     var cloneName by remember { mutableStateOf("") }
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (_: SecurityException) {
+                // Some providers don't return persistable grants; keep the selected URI anyway.
+            }
+            selectedProjectUri = uri
+            projectPath = uri.toString()
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Nuevo proyecto") },
+        title = {
+            Text(
+                if (mode == DialogMode.IMPORT_GITHUB) {
+                    "Importar proyecto (GitHub)"
+                } else {
+                    "Nuevo proyecto"
+                }
+            )
+        },
         text = {
             Column(
                 modifier = Modifier
@@ -52,35 +89,48 @@ fun NewProjectDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(
-                    text = "Crear local",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Medium
-                )
-                OutlinedTextField(
-                    value = projectName,
-                    onValueChange = { projectName = it },
-                    label = { Text("Nombre") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = projectPath,
-                    onValueChange = { projectPath = it },
-                    label = { Text("Ruta") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(
-                        onClick = { onCreateLocal(projectName.trim(), projectPath.trim()) },
-                        enabled = projectName.isNotBlank() && projectPath.isNotBlank()
-                    ) {
-                        Text("Crear")
+                if (mode == DialogMode.NEW_PROJECT) {
+                    Text(
+                        text = "Crear local",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium
+                    )
+                    OutlinedTextField(
+                        value = projectName,
+                        onValueChange = { projectName = it },
+                        label = { Text("Nombre") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = projectPath,
+                        onValueChange = {},
+                        label = { Text("Carpeta de guardado") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        readOnly = true
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { folderPickerLauncher.launch(null) }) {
+                            Text("Elegir carpeta")
+                        }
+                        TextButton(
+                            onClick = { onCreateLocal(projectName.trim(), projectPath.trim()) },
+                            enabled = projectName.isNotBlank() && projectPath.isNotBlank()
+                        ) {
+                            Text("Crear")
+                        }
                     }
-                }
+                    if (selectedProjectUri != null) {
+                        Text(
+                            text = "Destino seleccionado: $projectPath",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                }
 
                 Text(
                     text = "GitHub",
