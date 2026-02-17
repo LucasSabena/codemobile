@@ -154,18 +154,20 @@ object OpenAICodexAuth {
                 .build()
 
             val response = client.newCall(request).execute()
-            if (!response.isSuccessful) return null
+            response.use { resp ->
+                if (!resp.isSuccessful) return@use null
 
-            val json = response.body?.string() ?: return null
-            val tokens = gson.fromJson(json, TokenResponse::class.java)
-            val accountId = extractAccountId(tokens)
+                val json = resp.body?.string() ?: return@use null
+                val tokens = gson.fromJson(json, TokenResponse::class.java)
+                val accountId = extractAccountId(tokens)
 
-            CodexAuthResult(
-                accessToken = tokens.accessToken,
-                refreshToken = tokens.refreshToken,
-                expiresAt = System.currentTimeMillis() + ((tokens.expiresIn ?: 3600) * 1000L),
-                accountId = accountId
-            )
+                CodexAuthResult(
+                    accessToken = tokens.accessToken,
+                    refreshToken = tokens.refreshToken,
+                    expiresAt = System.currentTimeMillis() + ((tokens.expiresIn ?: 3600) * 1000L),
+                    accountId = accountId
+                )
+            }
         } catch (e: Exception) {
             null
         }
@@ -185,10 +187,12 @@ object OpenAICodexAuth {
 
         return try {
             val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                val json = response.body?.string() ?: return null
-                gson.fromJson(json, DeviceAuthResponse::class.java)
-            } else null
+            response.use { resp ->
+                if (resp.isSuccessful) {
+                    val json = resp.body?.string() ?: return@use null
+                    gson.fromJson(json, DeviceAuthResponse::class.java)
+                } else null
+            }
         } catch (e: Exception) {
             null
         }
@@ -214,12 +218,14 @@ object OpenAICodexAuth {
 
         return try {
             val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                val json = response.body?.string() ?: return null
-                gson.fromJson(json, DeviceAuthTokenResponse::class.java)
-            } else {
-                // 403 or 404 = still pending, keep polling
-                null
+            response.use { resp ->
+                if (resp.isSuccessful) {
+                    val json = resp.body?.string() ?: return@use null
+                    gson.fromJson(json, DeviceAuthTokenResponse::class.java)
+                } else {
+                    // 403 or 404 = still pending, keep polling
+                    null
+                }
             }
         } catch (e: Exception) {
             null
@@ -243,10 +249,12 @@ object OpenAICodexAuth {
 
         return try {
             val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                val json = response.body?.string() ?: return null
-                gson.fromJson(json, TokenResponse::class.java)
-            } else null
+            response.use { resp ->
+                if (resp.isSuccessful) {
+                    val json = resp.body?.string() ?: return@use null
+                    gson.fromJson(json, TokenResponse::class.java)
+                } else null
+            }
         } catch (e: Exception) {
             null
         }

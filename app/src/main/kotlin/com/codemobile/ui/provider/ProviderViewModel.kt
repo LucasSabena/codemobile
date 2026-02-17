@@ -196,20 +196,32 @@ class ProviderViewModel @Inject constructor(
                 providerRepository.save(config)
                 providerRepository.saveApiKey(config.id, state.apiKey)
 
+                android.util.Log.d("ProviderVM", "Saved provider ${provider.id} with config.id=${config.id}, registryId=${config.registryId}")
+
                 // Validate
                 val aiProvider = aiProviderFactory.createOrNull(config)
+                val skipList = setOf("github-copilot", "moonshot", "kimi-coding", "minimax")
+                android.util.Log.d("ProviderVM", "Created provider: ${aiProvider != null}, skipValidation=${provider.id in skipList}")
                 val isValid = aiProvider?.validateCredentials() ?: false
+                android.util.Log.d("ProviderVM", "Validation result: $isValid")
 
                 if (isValid) {
                     _authState.update { it.copy(isValidating = false, isConnected = true) }
                     _events.emit(ProviderUiEvent.ProviderConnected)
+                } else if (aiProvider != null) {
+                    // Provider was created but validation failed.
+                    // Many OpenAI-compatible providers don't support GET /models.
+                    // Keep the config and let the user try using it.
+                    android.util.Log.w("ProviderVM", "Validation failed for ${provider.id} — saving anyway")
+                    _authState.update { it.copy(isValidating = false, isConnected = true) }
+                    _events.emit(ProviderUiEvent.ProviderConnected)
                 } else {
-                    // Remove invalid config
+                    // Provider could not even be created — credentials missing
                     providerRepository.delete(config)
                     _authState.update {
                         it.copy(
                             isValidating = false,
-                            error = "API key inválida. Verificá tus credenciales."
+                            error = "No se pudo crear el proveedor. Verificá tus credenciales."
                         )
                     }
                 }

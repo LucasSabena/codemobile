@@ -7,6 +7,7 @@ import com.codemobile.ai.model.AIRole
 import com.codemobile.ai.model.AIStreamEvent
 import com.codemobile.ai.model.AITool
 import com.codemobile.ai.model.AIToolCall
+import com.codemobile.ai.streaming.SSE_ERROR_PREFIX
 import com.codemobile.ai.streaming.streamSSE
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -78,11 +79,21 @@ class OpenAIProvider(
             .map<String?, AIStreamEvent> { data ->
                 if (data == null) return@map AIStreamEvent.Done
 
-                val json = JsonParser.parseString(data).asJsonObject
+                // Handle SSE-level error payloads from the streaming layer
+                if (data.startsWith(SSE_ERROR_PREFIX)) {
+                    return@map AIStreamEvent.Error(data.removePrefix(SSE_ERROR_PREFIX).trim())
+                }
+
+                val json = try {
+                    JsonParser.parseString(data).asJsonObject
+                } catch (e: Exception) {
+                    return@map AIStreamEvent.Error("Invalid JSON from API: ${data.take(200)}")
+                }
                 parseSSEChunk(json, pendingToolCalls)
             }
             .catch { e ->
-                emit(AIStreamEvent.Error(e.message ?: "Unknown error"))
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                emit(AIStreamEvent.Error(e.message ?: "Unknown streaming error"))
             }
             .onCompletion {
                 // Emit any remaining complete tool calls

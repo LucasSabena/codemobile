@@ -142,7 +142,7 @@ fun HomeScreen(
             onConnectGitHubWithToken = { viewModel.connectGitHubWithToken(it) },
             onDisconnectGitHub = { viewModel.disconnectGitHub() },
             onLoadRepos = { viewModel.loadGitHubRepos() },
-            onCloneRepo = { url, name -> viewModel.cloneRepo(url, name) },
+            onCloneRepo = { url, path, name -> viewModel.cloneRepo(url, path, name) },
             onResetCloneState = { viewModel.resetCloneState() }
         )
     }
