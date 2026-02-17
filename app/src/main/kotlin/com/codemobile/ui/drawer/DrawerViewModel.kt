@@ -32,6 +32,7 @@ data class DrawerUiState(
     val gitHubAuthState: GitHubAuthState = GitHubAuthState.Disconnected,
     val gitHubRepos: List<GitHubRepo> = emptyList(),
     val isLoadingRepos: Boolean = false,
+    val reposError: String? = null,
     val cloneState: CloneState = CloneState.Idle
 )
 
@@ -147,10 +148,17 @@ class DrawerViewModel @Inject constructor(
     /** Check if we already have a stored GitHub token on startup */
     private fun checkGitHubConnection() {
         viewModelScope.launch {
-            if (gitHubAuth.isAuthenticated()) {
-                val user = withContext(Dispatchers.IO) { gitHubAuth.getUser() }
+            try {
+                if (gitHubAuth.isAuthenticated()) {
+                    val user = withContext(Dispatchers.IO) { gitHubAuth.getUser() }
+                    _uiState.update {
+                        it.copy(gitHubAuthState = GitHubAuthState.Connected(user))
+                    }
+                }
+            } catch (e: Exception) {
+                // Network error on startup — stay disconnected silently
                 _uiState.update {
-                    it.copy(gitHubAuthState = GitHubAuthState.Connected(user))
+                    it.copy(gitHubAuthState = GitHubAuthState.Disconnected)
                 }
             }
         }
@@ -199,16 +207,25 @@ class DrawerViewModel @Inject constructor(
     /** Connect using a Personal Access Token */
     fun connectGitHubWithToken(token: String) {
         viewModelScope.launch {
-            gitHubAuth.saveToken(token)
-            val user = withContext(Dispatchers.IO) { gitHubAuth.getUser() }
-            if (user != null) {
-                _uiState.update {
-                    it.copy(gitHubAuthState = GitHubAuthState.Connected(user))
+            try {
+                gitHubAuth.saveToken(token)
+                val user = withContext(Dispatchers.IO) { gitHubAuth.getUser() }
+                if (user != null) {
+                    _uiState.update {
+                        it.copy(gitHubAuthState = GitHubAuthState.Connected(user))
+                    }
+                } else {
+                    gitHubAuth.clearToken()
+                    _uiState.update {
+                        it.copy(gitHubAuthState = GitHubAuthState.AuthError("Token inválido o sin permisos"))
+                    }
                 }
-            } else {
+            } catch (e: Exception) {
                 gitHubAuth.clearToken()
                 _uiState.update {
-                    it.copy(gitHubAuthState = GitHubAuthState.AuthError("Token inválido o sin permisos"))
+                    it.copy(gitHubAuthState = GitHubAuthState.AuthError(
+                        "Error de conexión: ${e.message ?: "Sin respuesta del servidor"}"
+                    ))
                 }
             }
         }
@@ -230,9 +247,24 @@ class DrawerViewModel @Inject constructor(
     /** Load the user's recent repositories from GitHub API */
     fun loadGitHubRepos() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingRepos = true) }
-            val repos = withContext(Dispatchers.IO) { gitHubApiClient.listUserRepos() }
-            _uiState.update { it.copy(gitHubRepos = repos, isLoadingRepos = false) }
+            _uiState.update { it.copy(isLoadingRepos = true, reposError = null) }
+            try {
+                val repos = withContext(Dispatchers.IO) { gitHubApiClient.listUserRepos() }
+                _uiState.update {
+                    it.copy(
+                        gitHubRepos = repos,
+                        isLoadingRepos = false,
+                        reposError = if (repos.isEmpty()) "No se encontraron repositorios" else null
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isLoadingRepos = false,
+                        reposError = "Error al cargar repos: ${e.message ?: "Sin conexión"}"
+                    )
+                }
+            }
         }
     }
 

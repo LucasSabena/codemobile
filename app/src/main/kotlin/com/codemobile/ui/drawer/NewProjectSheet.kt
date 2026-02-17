@@ -137,9 +137,23 @@ fun NewProjectDialog(
                                     TextButton(onClick = onLoadRepos) { Text("Cargar Repos") }
                                     TextButton(onClick = onDisconnectGitHub) { Text("Desconectar") }
                                 }
+                                if (uiState.isLoadingRepos) {
+                                    Text(
+                                        "Cargando repositorios...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                uiState.reposError?.let { error ->
+                                    Text(
+                                        error,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
                                 if (uiState.gitHubRepos.isNotEmpty()) {
                                     Text("Repositorios", style = MaterialTheme.typography.labelLarge)
-                                    uiState.gitHubRepos.take(5).forEach { repo ->
+                                    uiState.gitHubRepos.take(15).forEach { repo ->
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -161,7 +175,26 @@ fun NewProjectDialog(
                                     }
                                 }
                             }
-                            else -> { Text("Estado: $auth") }
+                            is GitHubAuthState.AuthError -> {
+                                Text(
+                                    auth.message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                var tempToken by remember { mutableStateOf("") }
+                                OutlinedTextField(
+                                    value = tempToken,
+                                    onValueChange = { tempToken = it },
+                                    label = { Text("Personal Access Token") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                TextButton(
+                                    onClick = { onConnectGitHubWithToken(tempToken) },
+                                    enabled = tempToken.isNotBlank()
+                                ) { Text("Reintentar") }
+                            }
+                            else -> { Text("Conectando...") }
                         }
                     }
                     1 -> { // Create
