@@ -388,15 +388,31 @@ object ProviderRegistry {
         id = "moonshot",
         name = "Moonshot AI",
         description = "Modelos Kimi con contexto extendido y búsqueda integrada",
-        apiBaseUrl = "https://api.moonshot.cn/v1",
+        apiBaseUrl = "https://api.moonshot.ai/v1",
         envKeys = listOf("MOONSHOT_API_KEY"),
         authMethods = listOf(AuthMethod.API_KEY),
         category = ProviderCategory.CLOUD,
         apiType = ApiType.OPENAI_COMPATIBLE,
         models = listOf(
-            ModelDef(id = "kimi-k2", name = "Kimi K2", family = "kimi", contextWindow = 131_072, maxOutput = 65_536, supportsTools = true, supportsReasoning = true, costInputPer1M = 0.8, costOutputPer1M = 4.0),
+            ModelDef(id = "kimi-k2", name = "Kimi K2", family = "kimi", contextWindow = 131_072, maxOutput = 65_536, supportsTools = true, supportsReasoning = true, costInputPer1M = 0.6, costOutputPer1M = 2.5),
+            ModelDef(id = "kimi-k2-0711-preview", name = "Kimi K2 Preview", family = "kimi", contextWindow = 131_072, maxOutput = 65_536, supportsTools = true, supportsReasoning = true, costInputPer1M = 0.6, costOutputPer1M = 2.5),
             ModelDef(id = "kimi-k1.5-long", name = "Kimi K1.5 Long", family = "kimi", contextWindow = 131_072, maxOutput = 32_768, supportsTools = true, supportsReasoning = true, costInputPer1M = 0.5, costOutputPer1M = 2.0),
             ModelDef(id = "moonshot-v1-128k", name = "Moonshot V1 128K", family = "moonshot", contextWindow = 128_000, maxOutput = 8_192, supportsTools = true, costInputPer1M = 0.6, costOutputPer1M = 0.6),
+        )
+    )
+
+    private val kimiCoding = ProviderDef(
+        id = "kimi-coding",
+        name = "Kimi for Coding",
+        description = "Agente de código especializado de Moonshot AI con K2.5 y thinking",
+        apiBaseUrl = "https://api.kimi.com/coding/v1",
+        envKeys = listOf("KIMI_API_CODE"),
+        authMethods = listOf(AuthMethod.API_KEY),
+        category = ProviderCategory.CLOUD,
+        apiType = ApiType.ANTHROPIC,
+        models = listOf(
+            ModelDef(id = "kimi-for-coding/k2p5", name = "Kimi K2.5 Coding", family = "kimi-coding", contextWindow = 262_144, maxOutput = 65_536, supportsTools = true, supportsReasoning = true, costInputPer1M = 0.6, costOutputPer1M = 3.0),
+            ModelDef(id = "kimi-for-coding/kimi-k2-thinking", name = "Kimi K2 Thinking", family = "kimi-coding", contextWindow = 262_144, maxOutput = 65_536, supportsTools = true, supportsReasoning = true, costInputPer1M = 0.6, costOutputPer1M = 2.5),
         )
     )
 
@@ -1037,6 +1053,7 @@ object ProviderRegistry {
         together,
         perplexity,
         moonshot,
+        kimiCoding,
         minimax,
         cerebras,
         deepInfra,

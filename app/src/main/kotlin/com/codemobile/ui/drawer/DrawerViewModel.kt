@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
 
 data class DrawerUiState(
@@ -115,6 +116,17 @@ class DrawerViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             val project = projectRepository.create(name, path)
+            val session = sessionRepository.create(projectId = project.id)
+            onSessionCreated(session.id)
+        }
+    }
+
+    fun createDemoProjectAndSession(
+        onSessionCreated: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val projectRoot = createDemoProjectFiles()
+            val project = projectRepository.create(name = "Demo React", path = projectRoot.absolutePath)
             val session = sessionRepository.create(projectId = project.id)
             onSessionCreated(session.id)
         }
@@ -239,16 +251,23 @@ class DrawerViewModel @Inject constructor(
     // ── Git clone ─────────────────────────────────────────────
 
     /** Clone a repository from the given URL */
-    fun cloneRepo(repoUrl: String, customName: String? = null) {
+    fun cloneRepo(repoUrl: String, destinationPath: String? = null, customName: String? = null) {
         val normalizedUrl = gitCloneManager.normalizeGitUrl(repoUrl)
         val repoName = customName
             ?: gitCloneManager.extractRepoName(normalizedUrl)
             ?: "project"
+        
+        // Use user selected path or default
+        val targetDir = if (destinationPath != null) {
+            destinationPath
+        } else {
+            gitCloneManager.projectsDir
+        }
 
         viewModelScope.launch {
             gitCloneManager.clone(
                 repoUrl = normalizedUrl,
-                destinationDir = gitCloneManager.projectsDir,
+                destinationDir = targetDir,
                 repoName = repoName
             ).collect { event ->
                 when (event) {
@@ -277,5 +296,248 @@ class DrawerViewModel @Inject constructor(
     /** Reset clone state back to idle */
     fun resetCloneState() {
         _uiState.update { it.copy(cloneState = CloneState.Idle) }
+    }
+
+    private suspend fun createDemoProjectFiles(): File = withContext(Dispatchers.IO) {
+        val projectsDir = File(context.filesDir, "projects").apply { mkdirs() }
+        val folderName = "demo-react-${System.currentTimeMillis()}"
+        val root = File(projectsDir, folderName).apply { mkdirs() }
+        val srcDir = File(root, "src").apply { mkdirs() }
+
+        File(root, "package.json").writeText(
+            """
+            {
+              "name": "codemobile-demo-react",
+              "version": "1.0.0",
+              "private": true,
+              "scripts": {
+                "dev": "vite --host 0.0.0.0 --port 5173",
+                "build": "vite build",
+                "preview": "vite preview --host 0.0.0.0 --port 4173",
+                "dev:fallback": "node server.js"
+              },
+              "dependencies": {
+                "react": "^18.3.1",
+                "react-dom": "^18.3.1"
+              },
+              "devDependencies": {
+                "vite": "^5.4.10"
+              }
+            }
+            """.trimIndent()
+        )
+
+        File(root, "vite.config.js").writeText(
+            """
+            import { defineConfig } from 'vite'
+
+            export default defineConfig({
+              server: {
+                host: '0.0.0.0',
+                port: 5173
+              },
+              preview: {
+                host: '0.0.0.0',
+                port: 4173
+              }
+            })
+            """.trimIndent()
+        )
+
+        File(root, "server.js").writeText(
+            """
+            const http = require("http");
+            const fs = require("fs");
+            const path = require("path");
+
+            const PORT = Number(process.env.PORT || 5173);
+            const ROOT = __dirname;
+
+            const MIME_TYPES = {
+              ".html": "text/html; charset=utf-8",
+              ".css": "text/css; charset=utf-8",
+              ".js": "text/javascript; charset=utf-8",
+              ".json": "application/json; charset=utf-8"
+            };
+
+            const server = http.createServer((req, res) => {
+              const rawPath = req.url === "/" ? "/preview-static.html" : req.url;
+              const safePath = path.normalize(rawPath).replace(/^(\.\.[/\\])+/, "");
+              const filePath = path.join(ROOT, safePath);
+
+              fs.readFile(filePath, (err, data) => {
+                if (err) {
+                  res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+                  res.end("Not found");
+                  return;
+                }
+
+                const ext = path.extname(filePath).toLowerCase();
+                const contentType = MIME_TYPES[ext] || "application/octet-stream";
+                res.writeHead(200, { "Content-Type": contentType });
+                res.end(data);
+              });
+            });
+
+            server.listen(PORT, "0.0.0.0", () => {
+              console.log(`Local: http://localhost:${'$'}{PORT}`);
+            });
+            """.trimIndent()
+        )
+
+        File(root, "index.html").writeText(
+            """
+            <!doctype html>
+            <html lang="es">
+            <head>
+              <meta charset="UTF-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              <title>CodeMobile React Demo</title>
+            </head>
+            <body>
+              <div id="root"></div>
+              <script type="module" src="/src/main.jsx"></script>
+            </body>
+            </html>
+            """.trimIndent()
+        )
+
+        File(srcDir, "main.jsx").writeText(
+            """
+            import React from 'react'
+            import { createRoot } from 'react-dom/client'
+            import App from './App'
+            import './styles.css'
+
+            createRoot(document.getElementById('root')).render(
+              <React.StrictMode>
+                <App />
+              </React.StrictMode>
+            )
+            """.trimIndent()
+        )
+
+        File(srcDir, "App.jsx").writeText(
+            """
+            export default function App() {
+              return (
+                <main className="page">
+                  <section className="card">
+                    <p className="tag">Demo React</p>
+                    <h1>CodeMobile + React</h1>
+                    <p>
+                      Este proyecto demo usa Vite + React. Si hay runtime Node disponible,
+                      podés correr <code>npm install</code> y <code>npm run dev</code>.
+                    </p>
+                  </section>
+                </main>
+              )
+            }
+            """.trimIndent()
+        )
+
+        File(srcDir, "styles.css").writeText(
+            """
+            :root {
+              font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+              color: #10243d;
+              background: #eef4ff;
+            }
+
+            * {
+              box-sizing: border-box;
+            }
+
+            body {
+              margin: 0;
+            }
+
+            .page {
+              min-height: 100vh;
+              display: grid;
+              place-items: center;
+              padding: 24px;
+            }
+
+            .card {
+              width: min(760px, 100%);
+              background: white;
+              border-radius: 16px;
+              padding: 28px;
+              box-shadow: 0 12px 34px rgba(27, 42, 74, 0.14);
+            }
+
+            .tag {
+              display: inline-block;
+              margin: 0 0 8px;
+              padding: 4px 10px;
+              border-radius: 999px;
+              background: #dbe9ff;
+              color: #0a3c8e;
+              font-weight: 600;
+              font-size: 12px;
+            }
+            """.trimIndent()
+        )
+
+        File(root, "preview-static.html").writeText(
+            """
+            <!doctype html>
+            <html lang="es">
+            <head>
+              <meta charset="UTF-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              <title>CodeMobile React Demo (Static Preview)</title>
+              <style>
+                body {
+                  margin: 0;
+                  min-height: 100vh;
+                  display: grid;
+                  place-items: center;
+                  background: #eef4ff;
+                  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+                  color: #10243d;
+                }
+                .card {
+                  width: min(760px, calc(100% - 32px));
+                  background: white;
+                  border-radius: 16px;
+                  padding: 28px;
+                  box-shadow: 0 12px 34px rgba(27, 42, 74, 0.14);
+                }
+                code {
+                  background: #eef2ff;
+                  border-radius: 8px;
+                  padding: 2px 6px;
+                }
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <h1>Demo React creado</h1>
+                <p>Este es un preview estático porque la build actual no trae runtime Node/NPM.</p>
+                <p>El proyecto generado sí es React (Vite) en <code>src/</code>.</p>
+              </div>
+            </body>
+            </html>
+            """.trimIndent()
+        )
+
+        File(root, "README.md").writeText(
+            """
+            # Demo React
+
+            Proyecto base generado por CodeMobile para probar flujo React con Vite.
+
+            ## Scripts
+
+            - `npm run dev`: servidor de desarrollo en `http://localhost:5173`
+            - `npm run build`: build de producción
+            - `npm run preview`: preview del build
+            - `npm run dev:fallback`: servidor estático (`preview-static.html`)
+            """.trimIndent()
+        )
+
+        root
     }
 }

@@ -1,5 +1,6 @@
 package com.codemobile.ai.provider
 
+import com.codemobile.ai.auth.OpenAICodexAuth
 import com.codemobile.ai.registry.ProviderRegistry
 import com.codemobile.ai.registry.ProviderRegistry.ApiType
 import com.codemobile.core.data.repository.ProviderRepository
@@ -25,7 +26,7 @@ class AIProviderFactory @Inject constructor(
         /** Providers that don't support GET /models for validation */
         private val SKIP_VALIDATION_PROVIDERS = setOf(
             "github-copilot", "github-copilot-enterprise",
-            "moonshot", "minimax", "cohere", "ai21",
+            "moonshot", "kimi-coding", "minimax", "cohere", "ai21",
             "sambanova", "dashscope", "volcengine", "novita",
             "replicate", "siliconflow", "hyperbolic", "lambda",
             "lepton", "coze", "stepfun", "01ai",
@@ -47,6 +48,18 @@ class AIProviderFactory @Inject constructor(
             put("User-Agent", "CodeMobile/1.0")
             accountId?.let { put("ChatGPT-Account-Id", it) }
         }
+
+        /**
+         * Build Kimi for Coding headers.
+         * The api.kimi.com/coding/v1 endpoint validates User-Agent against
+         * an allowlist of known coding agents (Kimi CLI, Claude Code, Roo Code, etc.).
+         * CodeMobile is an open-source coding agent in the same category.
+         */
+        fun buildKimiCodingHeaders(): Map<String, String> = mapOf(
+            "User-Agent" to "CodeMobile/1.0 (Coding Agent)",
+            "HTTP-Referer" to "https://github.com/LucasSabena/codemobile",
+            "X-Title" to "CodeMobile"
+        )
     }
 
     /**
@@ -84,11 +97,20 @@ class AIProviderFactory @Inject constructor(
         val shouldSkipValidation = def.id in SKIP_VALIDATION_PROVIDERS
 
         return when (def.apiType) {
-            ApiType.ANTHROPIC -> ClaudeProvider(
-                id = config.id,
-                name = config.displayName,
-                apiKey = apiKey
-            )
+            ApiType.ANTHROPIC -> {
+                val headers = when (def.id) {
+                    "kimi-coding" -> buildKimiCodingHeaders()
+                    else -> emptyMap()
+                }
+                ClaudeProvider(
+                    id = config.id,
+                    name = config.displayName,
+                    apiKey = apiKey,
+                    baseUrl = baseUrl,
+                    extraHeaders = headers,
+                    skipValidation = shouldSkipValidation
+                )
+            }
             ApiType.OPENAI, ApiType.OPENAI_COMPATIBLE, ApiType.GOOGLE -> {
                 // Determine extra headers and endpoint for special providers
                 val (headers, endpoint) = when (def.id) {
@@ -168,8 +190,38 @@ class AIProviderFactory @Inject constructor(
     fun createOrNull(config: ProviderConfig): AIProvider? {
         return try {
             create(config)
-        } catch (e: IllegalStateException) {
+        } catch (e: Exception) {
+            android.util.Log.e("AIProviderFactory", "createOrNull failed for ${config.displayName} (${config.registryId}): ${e.message}", e)
             null
         }
+    }
+
+    /**
+     * Create a provider with automatic Codex token refresh.
+     * If the stored Codex access token is expired, attempts to refresh it
+     * using the stored refresh token before creating the provider.
+     * Returns null if credentials are missing or refresh fails.
+     */
+    suspend fun createOrNullWithRefresh(config: ProviderConfig): AIProvider? {
+        // Auto-refresh Codex tokens if expired
+        if (config.isOAuth && config.registryId == "openai") {
+            val expiry = providerRepository.getTokenExpiry(config.id)
+            if (expiry > 0 && System.currentTimeMillis() >= expiry) {
+                val refreshToken = providerRepository.getRefreshToken(config.id)
+                if (refreshToken != null) {
+                    val refreshed = OpenAICodexAuth.refreshAccessToken(refreshToken)
+                    if (refreshed != null) {
+                        providerRepository.saveAccessToken(config.id, refreshed.accessToken)
+                        providerRepository.saveRefreshToken(config.id, refreshed.refreshToken)
+                        providerRepository.saveTokenExpiry(config.id, refreshed.expiresAt)
+                        providerRepository.saveOAuthToken(config.id, refreshed.accessToken)
+                        refreshed.accountId?.let {
+                            providerRepository.saveAccountId(config.id, it)
+                        }
+                    }
+                }
+            }
+        }
+        return createOrNull(config)
     }
 }
