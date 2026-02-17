@@ -68,18 +68,27 @@ class GitCloneManager @Inject constructor(
         emit(CloneEvent.Progress("Descargando repositorio..."))
 
         try {
-            // Build the ZIP download URL
-            // https://github.com/owner/repo → https://github.com/owner/repo/archive/refs/heads/main.zip
-            val baseUrl = repoUrl.removeSuffix(".git").removeSuffix("/")
-            val zipUrl = "$baseUrl/archive/refs/heads/main.zip"
+            // Extract owner/repo from URL to use the GitHub API endpoint
+            // which properly supports Bearer token auth (works for private repos)
+            val cleanUrl = repoUrl.removeSuffix(".git").removeSuffix("/")
+            val ownerRepo = extractOwnerRepo(cleanUrl)
 
-            // Try main, then master
-            val zipStream = downloadZip(zipUrl)
-                ?: downloadZip(baseUrl + "/archive/refs/heads/master.zip")
-                ?: run {
-                    emit(CloneEvent.Error("No se pudo descargar el repositorio. Verificá la URL y los permisos."))
-                    return@flow
-                }
+            val zipStream = if (ownerRepo != null) {
+                // Use GitHub API endpoint (supports auth for private repos)
+                val (owner, repo) = ownerRepo
+                downloadZip("https://api.github.com/repos/$owner/$repo/zipball/main")
+                    ?: downloadZip("https://api.github.com/repos/$owner/$repo/zipball/master")
+                    ?: downloadZip("https://api.github.com/repos/$owner/$repo/zipball")
+            } else {
+                // Fallback to web archive URL for non-GitHub URLs
+                downloadZip("$cleanUrl/archive/refs/heads/main.zip")
+                    ?: downloadZip("$cleanUrl/archive/refs/heads/master.zip")
+            }
+
+            if (zipStream == null) {
+                emit(CloneEvent.Error("No se pudo descargar el repositorio. Verificá la URL y los permisos."))
+                return@flow
+            }
 
             emit(CloneEvent.Progress("Extrayendo archivos..."))
 
@@ -103,11 +112,15 @@ class GitCloneManager @Inject constructor(
     private fun downloadZip(url: String): InputStream? {
         val token = providerRepository.getGitHubToken()?.takeIf { it.isNotBlank() }
 
+        val isApiUrl = url.contains("api.github.com")
         val requestBuilder = Request.Builder().url(url)
         if (token != null) {
             requestBuilder.header("Authorization", "Bearer $token")
         }
-        requestBuilder.header("Accept", "application/vnd.github+json")
+        // API endpoint needs octet-stream Accept to get the actual ZIP bytes
+        if (isApiUrl) {
+            requestBuilder.header("Accept", "application/vnd.github.v3+json")
+        }
 
         val response = httpClient.newCall(requestBuilder.build()).execute()
         if (!response.isSuccessful) {
@@ -115,6 +128,18 @@ class GitCloneManager @Inject constructor(
             return null
         }
         return response.body?.byteStream()
+    }
+
+    /**
+     * Extracts owner and repo name from a GitHub URL.
+     * e.g. "https://github.com/LucasSabena/binary2026" → Pair("LucasSabena", "binary2026")
+     */
+    private fun extractOwnerRepo(url: String): Pair<String, String>? {
+        val regex = Regex("""github\.com[/:]([^/]+)/([^/]+)""")
+        val match = regex.find(url) ?: return null
+        val owner = match.groupValues[1]
+        val repo = match.groupValues[2].removeSuffix(".git")
+        return if (owner.isNotBlank() && repo.isNotBlank()) Pair(owner, repo) else null
     }
 
     /**
