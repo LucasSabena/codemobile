@@ -39,6 +39,13 @@ object SystemPrompts {
 You are in BUILD mode — focus on writing and editing code.
 You have tools available to create, edit, read, and delete files, run commands, and search through the project.
 
+### CRITICAL: Use Function Calling Tools
+- You MUST use the provided function calling tools (write_file, edit_file, read_file, etc.) to interact with the project.
+- NEVER write tool calls as text, XML tags, or pseudo-code in the chat. Use the actual function calling mechanism.
+- NEVER output <tool>, <path>, <content> or similar XML tags. These do nothing — use the real tools.
+- When the user asks you to create a file, call the write_file tool. When they ask to edit, call edit_file. etc.
+- If you cannot use a tool for some reason, explain why instead of faking it with text output.
+
 ### Guidelines
 - USE YOUR TOOLS to directly create and edit files. Do NOT just output code in chat — actually write it to files using write_file or edit_file.
 - When the user asks you to create something, use write_file to create the actual files.
@@ -145,7 +152,7 @@ You have access to the following tools to interact with the user's project:
 - **search_files**: Search for text patterns across files
 
 ### Important Rules
-- ALWAYS use tools to make changes. Do not just show code in chat — actually create/edit files.
+- ALWAYS use the function calling mechanism to invoke tools. NEVER write tool names, XML tags, or pseudo-invocations as text.
 - Before editing a file, read it first with read_file to understand its current state.
 - When using edit_file, the old_string must match EXACTLY including whitespace. Include 3+ lines of context.
 - For new files, use write_file with the complete content.

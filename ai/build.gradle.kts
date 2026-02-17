@@ -26,6 +26,7 @@ android {
 
 dependencies {
     implementation(project(":core"))
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
     // OkHttp + Retrofit
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

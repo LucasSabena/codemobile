@@ -43,8 +43,17 @@ dependencies {
     // WebView
     implementation("androidx.webkit:webkit:1.10.0")
 
+    // Embedded HTTP server for static project preview
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+
+    // SAF DocumentFile
+    implementation("androidx.documentfile:documentfile:1.0.1")
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // Hilt
+    implementation("com.google.dagger:hilt-android:2.50")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

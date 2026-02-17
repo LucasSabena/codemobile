@@ -2,9 +2,11 @@ package com.codemobile.ai.auth
 
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -135,7 +137,7 @@ object GitHubCopilotAuth {
         }
 
         emit(OAuthEvent.Error("El código expiró. Intentá de nuevo."))
-    }
+    }.flowOn(Dispatchers.IO)
 
     // ── Private helpers ──────────────────────────────────────────
 

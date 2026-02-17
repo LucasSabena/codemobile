@@ -249,28 +249,86 @@ class ClaudeProvider(
         // System prompt goes as top-level field in Claude API
         config.systemPrompt?.let { body["system"] = it }
 
-        // Messages
-        val msgList = messages.map { msg ->
-            val m = mutableMapOf<String, Any>(
-                "role" to when (msg.role) {
-                    com.codemobile.ai.model.AIRole.USER -> "user"
-                    com.codemobile.ai.model.AIRole.ASSISTANT -> "assistant"
-                    com.codemobile.ai.model.AIRole.TOOL -> "user" // Tool results go as user in Claude
-                    com.codemobile.ai.model.AIRole.SYSTEM -> "user"
+        // Build messages list with proper Anthropic format:
+        // - Assistant messages with tool_calls → include tool_use content blocks
+        // - Tool result messages → merge consecutive ones into a single "user" message
+        //   (Anthropic requires alternating user/assistant, no consecutive same-role messages)
+        val msgList = mutableListOf<Map<String, Any>>()
+        var i = 0
+        while (i < messages.size) {
+            val msg = messages[i]
+
+            when (msg.role) {
+                com.codemobile.ai.model.AIRole.ASSISTANT -> {
+                    val contentBlocks = mutableListOf<Map<String, Any>>()
+
+                    // Add text content if present
+                    val text = msg.content.trim()
+                    if (text.isNotEmpty()) {
+                        contentBlocks.add(mapOf("type" to "text", "text" to text))
+                    }
+
+                    // Add tool_use blocks for each tool call
+                    msg.toolCalls?.forEach { tc ->
+                        val input: Any = try {
+                            gson.fromJson(tc.arguments, Map::class.java) ?: emptyMap<String, Any>()
+                        } catch (_: Exception) {
+                            emptyMap<String, Any>()
+                        }
+                        contentBlocks.add(
+                            mapOf(
+                                "type" to "tool_use",
+                                "id" to tc.id,
+                                "name" to tc.name,
+                                "input" to input
+                            )
+                        )
+                    }
+
+                    // Ensure at least one content block
+                    if (contentBlocks.isEmpty()) {
+                        contentBlocks.add(mapOf("type" to "text", "text" to ""))
+                    }
+
+                    msgList.add(mapOf("role" to "assistant", "content" to contentBlocks))
                 }
-            )
-            if (msg.role == com.codemobile.ai.model.AIRole.TOOL && msg.toolCallId != null) {
-                m["content"] = listOf(
-                    mapOf(
-                        "type" to "tool_result",
-                        "tool_use_id" to msg.toolCallId,
-                        "content" to msg.content
+
+                com.codemobile.ai.model.AIRole.TOOL -> {
+                    // Collect all consecutive TOOL messages into one "user" message
+                    val toolResultBlocks = mutableListOf<Map<String, Any>>()
+                    while (i < messages.size && messages[i].role == com.codemobile.ai.model.AIRole.TOOL) {
+                        val toolMsg = messages[i]
+                        if (toolMsg.toolCallId != null) {
+                            toolResultBlocks.add(
+                                mapOf(
+                                    "type" to "tool_result",
+                                    "tool_use_id" to toolMsg.toolCallId,
+                                    "content" to listOf(
+                                        mapOf("type" to "text", "text" to toolMsg.content)
+                                    )
+                                )
+                            )
+                        }
+                        i++
+                    }
+                    if (toolResultBlocks.isNotEmpty()) {
+                        msgList.add(mapOf("role" to "user", "content" to toolResultBlocks))
+                    }
+                    continue // skip the i++ at bottom since we already advanced
+                }
+
+                com.codemobile.ai.model.AIRole.USER, com.codemobile.ai.model.AIRole.SYSTEM -> {
+                    msgList.add(
+                        mapOf(
+                            "role" to "user",
+                            "content" to listOf(
+                                mapOf("type" to "text", "text" to msg.content)
+                            )
+                        )
                     )
-                )
-            } else {
-                m["content"] = msg.content
+                }
             }
-            m
+            i++
         }
         body["messages"] = msgList
 

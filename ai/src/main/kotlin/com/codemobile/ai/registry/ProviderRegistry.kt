@@ -404,15 +404,14 @@ object ProviderRegistry {
     private val kimiCoding = ProviderDef(
         id = "kimi-coding",
         name = "Kimi for Coding",
-        description = "Agente de código especializado de Moonshot AI con K2.5 y thinking",
+        description = "Agente de código especializado de Moonshot AI — usa API Anthropic-compatible",
         apiBaseUrl = "https://api.kimi.com/coding/v1",
-        envKeys = listOf("KIMI_API_CODE"),
+        envKeys = listOf("KIMI_API_KEY"),
         authMethods = listOf(AuthMethod.API_KEY),
         category = ProviderCategory.CLOUD,
         apiType = ApiType.ANTHROPIC,
         models = listOf(
-            ModelDef(id = "kimi-for-coding/k2p5", name = "Kimi K2.5 Coding", family = "kimi-coding", contextWindow = 262_144, maxOutput = 65_536, supportsTools = true, supportsReasoning = true, costInputPer1M = 0.6, costOutputPer1M = 3.0),
-            ModelDef(id = "kimi-for-coding/kimi-k2-thinking", name = "Kimi K2 Thinking", family = "kimi-coding", contextWindow = 262_144, maxOutput = 65_536, supportsTools = true, supportsReasoning = true, costInputPer1M = 0.6, costOutputPer1M = 2.5),
+            ModelDef(id = "kimi-for-coding", name = "Kimi for Coding", family = "kimi-coding", contextWindow = 262_144, maxOutput = 32_768, supportsTools = true, supportsReasoning = true, costInputPer1M = 0.6, costOutputPer1M = 3.0),
         )
     )
 

@@ -195,7 +195,8 @@ fun ProviderAuthScreen(
                                 verificationUri = state.oauthVerificationUri,
                                 isPolling = state.isOAuthPolling,
                                 isValidating = state.isValidating,
-                                onStartAuth = viewModel::onConnect
+                                onStartAuth = viewModel::onConnect,
+                                onResetAuth = viewModel::onResetOpenAICodexAuth
                             )
                         }
                     }
@@ -725,7 +726,8 @@ private fun OpenAICodexSection(
     verificationUri: String,
     isPolling: Boolean,
     isValidating: Boolean,
-    onStartAuth: () -> Unit
+    onStartAuth: () -> Unit,
+    onResetAuth: () -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
@@ -859,6 +861,21 @@ private fun OpenAICodexSection(
                     Text("Conectar con ChatGPT", fontWeight = FontWeight.SemiBold)
                 }
             }
+        }
+
+        Button(
+            onClick = onResetAuth,
+            enabled = !isValidating && !isPolling,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        ) {
+            Text("Reiniciar sesion OAuth", fontWeight = FontWeight.Medium)
         }
     }
 }

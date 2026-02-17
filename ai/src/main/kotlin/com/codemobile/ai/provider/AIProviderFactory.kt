@@ -51,14 +51,11 @@ class AIProviderFactory @Inject constructor(
 
         /**
          * Build Kimi for Coding headers.
-         * The api.kimi.com/coding/v1 endpoint validates User-Agent against
-         * an allowlist of known coding agents (Kimi CLI, Claude Code, Roo Code, etc.).
-         * CodeMobile is an open-source coding agent in the same category.
+         * Kimi Coding uses the Anthropic Messages API format.
+         * The Accept header ensures SSE streaming works correctly.
          */
         fun buildKimiCodingHeaders(): Map<String, String> = mapOf(
-            "User-Agent" to "CodeMobile/1.0 (Coding Agent)",
-            "HTTP-Referer" to "https://github.com/LucasSabena/codemobile",
-            "X-Title" to "CodeMobile"
+            "Accept" to "text/event-stream"
         )
     }
 
@@ -136,7 +133,10 @@ class AIProviderFactory @Inject constructor(
                     baseUrl = baseUrl,
                     extraHeaders = headers,
                     chatEndpointOverride = endpoint,
-                    skipValidation = shouldSkipValidation
+                    skipValidation = shouldSkipValidation,
+                    // Only OpenAI and GitHub Copilot reliably support stream_options
+                    supportsStreamOptions = def.apiType == ApiType.OPENAI ||
+                        def.id in setOf("github-copilot", "github-copilot-enterprise")
                 )
             }
         }
@@ -205,19 +205,26 @@ class AIProviderFactory @Inject constructor(
     suspend fun createOrNullWithRefresh(config: ProviderConfig): AIProvider? {
         // Auto-refresh Codex tokens if expired
         if (config.isOAuth && config.registryId == "openai") {
+            val access = providerRepository.getAccessToken(config.id)
+                ?: providerRepository.getOAuthToken(config.id)
             val expiry = providerRepository.getTokenExpiry(config.id)
-            if (expiry > 0 && System.currentTimeMillis() >= expiry) {
-                val refreshToken = providerRepository.getRefreshToken(config.id)
-                if (refreshToken != null) {
-                    val refreshed = OpenAICodexAuth.refreshAccessToken(refreshToken)
-                    if (refreshed != null) {
-                        providerRepository.saveAccessToken(config.id, refreshed.accessToken)
-                        providerRepository.saveRefreshToken(config.id, refreshed.refreshToken)
-                        providerRepository.saveTokenExpiry(config.id, refreshed.expiresAt)
-                        providerRepository.saveOAuthToken(config.id, refreshed.accessToken)
-                        refreshed.accountId?.let {
-                            providerRepository.saveAccountId(config.id, it)
-                        }
+            val refreshToken = providerRepository.getRefreshToken(config.id)
+
+            val shouldRefresh = refreshToken != null && (
+                access.isNullOrBlank() ||
+                    expiry <= 0L ||
+                    System.currentTimeMillis() >= expiry
+                )
+
+            if (shouldRefresh) {
+                val refreshed = refreshToken?.let { OpenAICodexAuth.refreshAccessToken(it) }
+                if (refreshed != null) {
+                    providerRepository.saveAccessToken(config.id, refreshed.accessToken)
+                    providerRepository.saveRefreshToken(config.id, refreshed.refreshToken)
+                    providerRepository.saveTokenExpiry(config.id, refreshed.expiresAt)
+                    providerRepository.saveOAuthToken(config.id, refreshed.accessToken)
+                    refreshed.accountId?.let {
+                        providerRepository.saveAccountId(config.id, it)
                     }
                 }
             }

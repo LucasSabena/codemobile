@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -163,6 +164,60 @@ class ProviderViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Hard reset for OpenAI Codex OAuth:
+     * removes all saved OpenAI provider configs/tokens and starts a fresh device flow.
+     */
+    fun onResetOpenAICodexAuth() {
+        val state = _authState.value
+        val provider = state.provider ?: return
+
+        if (provider.id != "openai" || state.selectedMethod != AuthMethod.OAUTH_OPENAI_CODEX) {
+            return
+        }
+
+        _authState.update {
+            it.copy(
+                isValidating = true,
+                isConnected = false,
+                isOAuthPolling = false,
+                oauthUserCode = "",
+                oauthVerificationUri = "",
+                browserOAuthUrl = null,
+                isWaitingBrowserAuth = false,
+                error = null
+            )
+        }
+
+        viewModelScope.launch {
+            try {
+                deleteProvidersByRegistryId(provider.id)
+                _authState.update {
+                    it.copy(
+                        isValidating = false,
+                        isConnected = false,
+                        isOAuthPolling = false,
+                        oauthUserCode = "",
+                        oauthVerificationUri = "",
+                        browserOAuthUrl = null,
+                        isWaitingBrowserAuth = false,
+                        error = null
+                    )
+                }
+
+                // Immediately trigger a clean login flow.
+                startOpenAICodexAuth(provider)
+            } catch (e: Exception) {
+                _authState.update {
+                    it.copy(
+                        isValidating = false,
+                        error = e.message ?: "No se pudo reiniciar la sesion de OpenAI."
+                    )
+                }
+            }
+        }
+    }
+
     private fun connectWithApiKey(provider: ProviderDef, state: AuthUiState) {
         if (state.apiKey.isBlank()) {
             _authState.update { it.copy(error = "Ingresá tu API key") }
@@ -195,6 +250,11 @@ class ProviderViewModel @Inject constructor(
                 // Save config first
                 providerRepository.save(config)
                 providerRepository.saveApiKey(config.id, state.apiKey)
+
+                // Ensure key is persisted before creating the provider
+                if (providerRepository.getApiKey(config.id).isNullOrBlank()) {
+                    providerRepository.saveApiKey(config.id, state.apiKey)
+                }
 
                 android.util.Log.d("ProviderVM", "Saved provider ${provider.id} with config.id=${config.id}, registryId=${config.registryId}")
 
@@ -259,6 +319,8 @@ class ProviderViewModel @Inject constructor(
                     }
 
                     is GitHubCopilotAuth.OAuthEvent.Success -> {
+                        deleteProvidersByRegistryId(provider.id)
+
                         // Save the token
                         val config = ProviderConfig(
                             type = ProviderType.COPILOT,
@@ -330,6 +392,8 @@ class ProviderViewModel @Inject constructor(
                         val codexModel = provider.models.firstOrNull { it.id.contains("codex") }
                             ?: provider.models.firstOrNull()
 
+                        deleteProvidersByRegistryId(provider.id)
+
                         val config = ProviderConfig(
                             type = ProviderType.OPENAI,
                             displayName = "ChatGPT Plus/Pro",
@@ -349,6 +413,19 @@ class ProviderViewModel @Inject constructor(
                         providerRepository.saveOAuthToken(config.id, result.accessToken)
                         result.accountId?.let {
                             providerRepository.saveAccountId(config.id, it)
+                        }
+
+                        val persistedAccess = providerRepository.getAccessToken(config.id)
+                            ?: providerRepository.getOAuthToken(config.id)
+                        if (persistedAccess.isNullOrBlank()) {
+                            _authState.update {
+                                it.copy(
+                                    isOAuthPolling = false,
+                                    isValidating = false,
+                                    error = "Se completó el login, pero no se pudieron persistir las credenciales OAuth. Reintentá."
+                                )
+                            }
+                            return@collect
                         }
 
                         _authState.update {
@@ -511,4 +588,12 @@ class ProviderViewModel @Inject constructor(
             ProviderRegistry.ApiType.OPENAI_COMPATIBLE -> ProviderType.OPENAI_COMPATIBLE
         }
     }
+
+    private suspend fun deleteProvidersByRegistryId(registryId: String) {
+        val providers = providerRepository.getAllProviders().first()
+        providers
+            .filter { it.registryId == registryId }
+            .forEach { providerRepository.delete(it) }
+    }
 }
+

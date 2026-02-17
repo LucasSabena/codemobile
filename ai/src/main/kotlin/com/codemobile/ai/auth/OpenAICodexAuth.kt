@@ -2,9 +2,12 @@ package com.codemobile.ai.auth
 
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -133,43 +136,45 @@ object OpenAICodexAuth {
         }
 
         emit(CodexEvent.Error("El código expiró. Intentá de nuevo."))
-    }
+    }.flowOn(Dispatchers.IO)
 
     /**
      * Refresh an expired access token using the refresh token.
      * @return New [CodexAuthResult] or null on failure.
      */
     suspend fun refreshAccessToken(refreshToken: String): CodexAuthResult? {
-        return try {
-            val body = buildString {
-                append("grant_type=refresh_token")
-                append("&refresh_token=").append(refreshToken)
-                append("&client_id=").append(CLIENT_ID)
+        return withContext(Dispatchers.IO) {
+            try {
+                val body = buildString {
+                    append("grant_type=refresh_token")
+                    append("&refresh_token=").append(refreshToken)
+                    append("&client_id=").append(CLIENT_ID)
+                }
+
+                val request = Request.Builder()
+                    .url("$ISSUER/oauth/token")
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .post(body.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                    .build()
+
+                val response = client.newCall(request).execute()
+                response.use { resp ->
+                    if (!resp.isSuccessful) return@use null
+
+                    val json = resp.body?.string() ?: return@use null
+                    val tokens = gson.fromJson(json, TokenResponse::class.java)
+                    val accountId = extractAccountId(tokens)
+
+                    CodexAuthResult(
+                        accessToken = tokens.accessToken,
+                        refreshToken = tokens.refreshToken,
+                        expiresAt = System.currentTimeMillis() + ((tokens.expiresIn ?: 3600) * 1000L),
+                        accountId = accountId
+                    )
+                }
+            } catch (e: Exception) {
+                null
             }
-
-            val request = Request.Builder()
-                .url("$ISSUER/oauth/token")
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .post(body.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
-                .build()
-
-            val response = client.newCall(request).execute()
-            response.use { resp ->
-                if (!resp.isSuccessful) return@use null
-
-                val json = resp.body?.string() ?: return@use null
-                val tokens = gson.fromJson(json, TokenResponse::class.java)
-                val accountId = extractAccountId(tokens)
-
-                CodexAuthResult(
-                    accessToken = tokens.accessToken,
-                    refreshToken = tokens.refreshToken,
-                    expiresAt = System.currentTimeMillis() + ((tokens.expiresIn ?: 3600) * 1000L),
-                    accountId = accountId
-                )
-            }
-        } catch (e: Exception) {
-            null
         }
     }
 

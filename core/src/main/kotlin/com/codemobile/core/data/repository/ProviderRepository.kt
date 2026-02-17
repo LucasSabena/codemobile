@@ -52,7 +52,7 @@ class ProviderRepository @Inject constructor(
 
     // Secure credential storage
     fun saveApiKey(providerId: String, apiKey: String) {
-        securePrefs.edit().putString("key_$providerId", apiKey).apply()
+        securePrefs.edit().putString("key_$providerId", apiKey.trim()).commit()
     }
 
     fun getApiKey(providerId: String): String? {
@@ -60,7 +60,7 @@ class ProviderRepository @Inject constructor(
     }
 
     fun saveOAuthToken(providerId: String, token: String) {
-        securePrefs.edit().putString("token_$providerId", token).apply()
+        securePrefs.edit().putString("token_$providerId", token.trim()).commit()
     }
 
     fun getOAuthToken(providerId: String): String? {
@@ -70,7 +70,7 @@ class ProviderRepository @Inject constructor(
     // ── Extended OAuth credential storage (Codex, etc.) ──────────
 
     fun saveRefreshToken(providerId: String, token: String) {
-        securePrefs.edit().putString("refresh_$providerId", token).apply()
+        securePrefs.edit().putString("refresh_$providerId", token.trim()).commit()
     }
 
     fun getRefreshToken(providerId: String): String? {
@@ -78,7 +78,7 @@ class ProviderRepository @Inject constructor(
     }
 
     fun saveAccessToken(providerId: String, token: String) {
-        securePrefs.edit().putString("access_$providerId", token).apply()
+        securePrefs.edit().putString("access_$providerId", token.trim()).commit()
     }
 
     fun getAccessToken(providerId: String): String? {
@@ -86,7 +86,7 @@ class ProviderRepository @Inject constructor(
     }
 
     fun saveTokenExpiry(providerId: String, expiresAt: Long) {
-        securePrefs.edit().putLong("expires_$providerId", expiresAt).apply()
+        securePrefs.edit().putLong("expires_$providerId", expiresAt).commit()
     }
 
     fun getTokenExpiry(providerId: String): Long {
@@ -94,7 +94,7 @@ class ProviderRepository @Inject constructor(
     }
 
     fun saveAccountId(providerId: String, accountId: String) {
-        securePrefs.edit().putString("account_$providerId", accountId).apply()
+        securePrefs.edit().putString("account_$providerId", accountId.trim()).commit()
     }
 
     fun getAccountId(providerId: String): String? {
@@ -102,7 +102,7 @@ class ProviderRepository @Inject constructor(
     }
 
     fun saveGitHubToken(token: String) {
-        securePrefs.edit().putString("github_token", token).apply()
+        securePrefs.edit().putString("github_token", token.trim()).commit()
     }
 
     fun getGitHubToken(): String? {

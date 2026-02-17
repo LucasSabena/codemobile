@@ -42,7 +42,8 @@ class OpenAIProvider(
     private val baseUrl: String = "https://api.openai.com/v1",
     private val extraHeaders: Map<String, String> = emptyMap(),
     private val chatEndpointOverride: String? = null,
-    private val skipValidation: Boolean = false
+    private val skipValidation: Boolean = false,
+    private val supportsStreamOptions: Boolean = true
 ) : AIProvider {
 
     private val gson = Gson()
@@ -213,9 +214,13 @@ class OpenAIProvider(
     ): String {
         val body = mutableMapOf<String, Any>(
             "model" to model,
-            "stream" to true,
-            "stream_options" to mapOf("include_usage" to true)
+            "stream" to true
         )
+
+        // stream_options is an OpenAI extension; some compatible providers reject it
+        if (supportsStreamOptions) {
+            body["stream_options"] = mapOf("include_usage" to true)
+        }
 
         // Build messages array
         val msgList = mutableListOf<Map<String, Any>>()

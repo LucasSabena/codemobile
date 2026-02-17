@@ -1,4 +1,4 @@
-package com.codemobile.ui.chat
+﻿package com.codemobile.ui.chat
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -86,8 +86,11 @@ import com.codemobile.core.model.Message
 import com.codemobile.core.model.MessageRole
 import com.codemobile.core.model.ProviderConfig
 import com.codemobile.core.model.SessionMode
+import com.codemobile.preview.PreviewScreen
 import com.codemobile.ui.theme.CodeMobileThemeTokens
 import kotlinx.coroutines.launch
+
+import androidx.compose.material.icons.filled.PlayArrow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -126,12 +129,7 @@ fun ChatScreen(
             currentProvider = uiState.selectedProvider,
             selectedModelId = uiState.selectedModelId,
             onSelectProviderModel = { provider, modelId ->
-                if (uiState.selectedProvider?.id != provider.id) {
-                    viewModel.onSelectProvider(provider)
-                }
-                if (uiState.selectedModelId != modelId) {
-                    viewModel.onSelectModel(modelId)
-                }
+                viewModel.onSelectProviderModel(provider, modelId)
             },
             onAddProvider = {
                 showModelSelectionDialog = false
@@ -169,6 +167,8 @@ fun ChatScreen(
                                     insightsDrawerState.open()
                                 }
                             },
+                            onTogglePreview = { viewModel.togglePreview() },
+                            isPreviewRunning = uiState.previewState.isRunning,
                             onSettingsClick = onNavigateToSettings
                         )
                     },
@@ -217,6 +217,16 @@ fun ChatScreen(
             }
         }
     }
+
+    // Preview overlay
+    if (uiState.showPreview && uiState.previewState.url != null) {
+        PreviewScreen(
+            url = uiState.previewState.url!!,
+            mode = uiState.previewState.mode,
+            onClose = { viewModel.togglePreview() },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -225,6 +235,8 @@ private fun ChatTopBar(
     projectName: String,
     onOpenDrawer: () -> Unit,
     onOpenInsights: () -> Unit,
+    onTogglePreview: () -> Unit,
+    isPreviewRunning: Boolean,
     onSettingsClick: () -> Unit
 ) {
     TopAppBar(
@@ -242,6 +254,17 @@ private fun ChatTopBar(
             }
         },
         actions = {
+            // Preview toggle button
+            IconButton(onClick = onTogglePreview) {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = "Preview",
+                    tint = if (isPreviewRunning)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             IconButton(onClick = onOpenInsights) {
                 Icon(Icons.Default.Info, contentDescription = "Panel de sesion")
             }
