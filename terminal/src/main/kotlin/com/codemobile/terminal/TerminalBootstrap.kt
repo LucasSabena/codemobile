@@ -18,6 +18,7 @@ class TerminalBootstrap @Inject constructor(
 
     val homeDir: File get() = context.filesDir
     val binDir: String get() = context.applicationInfo.nativeLibraryDir
+    val shimsDir: File get() = File(homeDir, "bin")
     val projectsDir: File get() = File(homeDir, "projects")
     val tmpDir: File get() = File(homeDir, "tmp")
 
@@ -27,7 +28,7 @@ class TerminalBootstrap @Inject constructor(
     val environment: Map<String, String> by lazy {
         mapOf(
             "HOME" to homeDir.absolutePath,
-            "PATH" to "$binDir:${homeDir.absolutePath}/.npm-global/bin:/system/bin",
+            "PATH" to "${shimsDir.absolutePath}:$binDir:${homeDir.absolutePath}/.npm-global/bin:/system/bin",
             "PREFIX" to homeDir.absolutePath,
             "TMPDIR" to tmpDir.absolutePath,
             "NODE_PATH" to "${homeDir.absolutePath}/.npm-global/lib/node_modules",
@@ -58,6 +59,17 @@ class TerminalBootstrap @Inject constructor(
         File(homeDir, ".npm-global/lib/node_modules").mkdirs()
         File(homeDir, ".npm/_cache").mkdirs()
         File(homeDir, ".config").mkdirs()
+        shimsDir.mkdirs()
+
+        // Ensure bundled native binaries are executable when present.
+        listOf("node", "git", "dash", "bash", "ssl", "crypto", "z", "readline").forEach { name ->
+            val nativeFile = File(binDir, "lib$name.so")
+            if (nativeFile.exists()) {
+                nativeFile.setExecutable(true, false)
+            }
+        }
+
+        createRuntimeShims()
 
         // Create a basic .bashrc / .profile
         val profile = File(homeDir, ".profile")
@@ -65,7 +77,7 @@ class TerminalBootstrap @Inject constructor(
             profile.writeText(
                 """
                 export HOME=${homeDir.absolutePath}
-                export PATH=$binDir:${'$'}HOME/.npm-global/bin:${'$'}PATH
+                export PATH=${shimsDir.absolutePath}:$binDir:${'$'}HOME/.npm-global/bin:${'$'}PATH
                 export PREFIX=${'$'}HOME
                 export TMPDIR=${'$'}HOME/tmp
                 export TERM=xterm-256color
@@ -89,7 +101,11 @@ class TerminalBootstrap @Inject constructor(
     fun getNativeBinaryPath(name: String): String? {
         val soName = "lib$name.so"
         val file = File(binDir, soName)
-        return if (file.exists() && file.canExecute()) file.absolutePath else null
+        if (!file.exists()) return null
+        if (!file.canExecute()) {
+            file.setExecutable(true, false)
+        }
+        return if (file.canExecute()) file.absolutePath else null
     }
 
     /**
@@ -106,8 +122,48 @@ class TerminalBootstrap @Inject constructor(
      * Get the shell command to use for sessions.
      */
     fun getShellCommand(): String {
-        return getNativeBinaryPath("dash")
+        return File(shimsDir, "dash").takeIf { it.exists() }?.absolutePath
+            ?: getNativeBinaryPath("dash")
             ?: getNativeBinaryPath("bash")
             ?: "/system/bin/sh"
+    }
+
+    private fun createRuntimeShims() {
+        val nodeNative = getNativeBinaryPath("node")
+        val dashNative = getNativeBinaryPath("dash") ?: "/system/bin/sh"
+
+        val dashShim = File(shimsDir, "dash")
+        if (!dashShim.exists()) {
+            dashShim.writeText(
+                """
+                #!$dashNative
+                exec "$dashNative" "${'$'}@"
+                """.trimIndent()
+            )
+            dashShim.setExecutable(true, false)
+        }
+
+        if (nodeNative != null) {
+            val nodeShim = File(shimsDir, "node")
+            nodeShim.writeText(
+                """
+                #!$dashNative
+                exec "$nodeNative" "${'$'}@"
+                """.trimIndent()
+            )
+            nodeShim.setExecutable(true, false)
+        }
+
+        val npmCli = File(homeDir, ".npm-global/lib/node_modules/npm/bin/npm-cli.js")
+        if (npmCli.exists() && nodeNative != null) {
+            val npmShim = File(shimsDir, "npm")
+            npmShim.writeText(
+                """
+                #!$dashNative
+                exec "${File(shimsDir, "node").absolutePath}" "$npmCli" "${'$'}@"
+                """.trimIndent()
+            )
+            npmShim.setExecutable(true, false)
+        }
     }
 }

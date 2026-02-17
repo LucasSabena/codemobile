@@ -50,6 +50,7 @@ fun NewProjectDialog(
     uiState: DrawerUiState,
     onDismiss: () -> Unit,
     onCreateLocal: (String, String) -> Unit,
+    onCreateDemo: () -> Unit,
     onConnectGitHub: () -> Unit,
     onConnectGitHubWithToken: (String) -> Unit,
     onDisconnectGitHub: () -> Unit,
@@ -163,6 +164,9 @@ fun NewProjectDialog(
                             }
                             else -> { Text("Estado: $auth") }
                         }
+                        TextButton(onClick = onCreateDemo) {
+                            Text("Crear Proyecto Demo")
+                        }
                     }
                     1 -> { // Create
                         OutlinedTextField(
@@ -188,6 +192,11 @@ fun NewProjectDialog(
                             enabled = projectName.isNotBlank() && projectPath.isNotBlank()
                         ) {
                             Text("Crear Proyecto")
+                        }
+                        TextButton(
+                            onClick = onCreateDemo
+                        ) {
+                            Text("Crear Proyecto Demo")
                         }
                     }
                     2 -> { // Clone
@@ -241,4 +250,3 @@ fun NewProjectDialog(
         }
     )
 }
-

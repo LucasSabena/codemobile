@@ -112,7 +112,7 @@ fun PreviewScreen(
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                    settings.allowFileAccess = false
+                    settings.allowFileAccess = true
                     webViewClient = WebViewClient()
                     webChromeClient = WebChromeClient()
                     loadUrl(url)

@@ -193,6 +193,13 @@ fun AppDrawerContent(
                     onCloseDrawer()
                 }
             },
+            onCreateDemo = {
+                viewModel.createDemoProjectAndSession { sessionId ->
+                    showNewProjectDialog = false
+                    onSessionClick(sessionId)
+                    onCloseDrawer()
+                }
+            },
             onConnectGitHub = { viewModel.connectGitHub() },
             onConnectGitHubWithToken = { viewModel.connectGitHubWithToken(it) },
             onDisconnectGitHub = { viewModel.disconnectGitHub() },

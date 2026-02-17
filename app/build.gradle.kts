@@ -1,3 +1,5 @@
+import org.gradle.api.GradleException
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -56,6 +58,47 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+}
+
+val requiredNodeRuntimeLibs = listOf(
+    "libnode.so",
+    "libdash.so"
+)
+
+tasks.register("verifyEmbeddedNodeRuntime") {
+    group = "verification"
+    description = "Fails build if required embedded Node runtime libs are missing."
+
+    doLast {
+        val abiDir = file("src/main/jniLibs/arm64-v8a")
+        val missing = requiredNodeRuntimeLibs.filter { lib ->
+            !file("${abiDir.path}/$lib").exists()
+        }
+
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                buildString {
+                    appendLine("Missing required Node runtime libraries for Android build:")
+                    missing.forEach { appendLine("- $it") }
+                    appendLine()
+                    appendLine("Expected location:")
+                    appendLine("app/src/main/jniLibs/arm64-v8a/")
+                    appendLine()
+                    appendLine("Build blocked because localhost dev server is mandatory.")
+                }
+            )
+        }
+    }
+}
+
+tasks.named("preBuild") {
+    dependsOn("verifyEmbeddedNodeRuntime")
 }
 
 dependencies {

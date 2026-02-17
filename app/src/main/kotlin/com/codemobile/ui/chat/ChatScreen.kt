@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -50,6 +51,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -79,6 +81,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.codemobile.ai.registry.ProviderRegistry
@@ -86,6 +90,7 @@ import com.codemobile.core.model.Message
 import com.codemobile.core.model.MessageRole
 import com.codemobile.core.model.ProviderConfig
 import com.codemobile.core.model.SessionMode
+import com.codemobile.preview.PreviewScreen
 import com.codemobile.ui.theme.CodeMobileThemeTokens
 import kotlinx.coroutines.launch
 
@@ -103,11 +108,14 @@ fun ChatScreen(
     val insightsDrawerState = rememberDrawerState(DrawerValue.Closed)
 
     var showModelSelectionDialog by remember { mutableStateOf(false) }
+    var showPreview by remember { mutableStateOf(false) }
+    var pendingPreviewLaunch by remember { mutableStateOf(false) }
     var insightsTabIndex by rememberSaveable { mutableStateOf(0) }
     var effortLevel by rememberSaveable { mutableStateOf("Normal") }
 
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
+            pendingPreviewLaunch = false
             snackbarHostState.showSnackbar(error)
             viewModel.clearError()
         }
@@ -117,6 +125,13 @@ fun ChatScreen(
         uiState.insightsError?.let { error ->
             snackbarHostState.showSnackbar(error)
             viewModel.clearInsightsError()
+        }
+    }
+
+    LaunchedEffect(uiState.devServerUrl, pendingPreviewLaunch) {
+        if (pendingPreviewLaunch && uiState.devServerUrl != null) {
+            showPreview = true
+            pendingPreviewLaunch = false
         }
     }
 
@@ -199,6 +214,8 @@ fun ChatScreen(
                             selectedProvider = uiState.selectedProvider,
                             selectedModelId = uiState.selectedModelId,
                             effortLevel = effortLevel,
+                            devServerUrl = uiState.devServerUrl,
+                            isStartingDevServer = uiState.isStartingDevServer,
                             onTextChanged = viewModel::onInputChanged,
                             onSend = viewModel::onSendMessage,
                             onStop = viewModel::onStopStreaming,
@@ -210,11 +227,33 @@ fun ChatScreen(
                             onOpenModelPicker = { showModelSelectionDialog = true },
                             onAddProvider = onNavigateToConnectProvider,
                             onSelectEffort = { effortLevel = it },
+                            onOpenPreview = { showPreview = true },
+                            onCompileAndPreview = {
+                                if (uiState.devServerUrl != null) {
+                                    showPreview = true
+                                } else {
+                                    pendingPreviewLaunch = true
+                                    viewModel.onCompileAndPreview()
+                                }
+                            },
                             enabled = !uiState.noSession
                         )
                     }
                 }
             }
+        }
+    }
+
+    val previewUrl = uiState.devServerUrl
+    if (showPreview && previewUrl != null) {
+        Dialog(
+            onDismissRequest = { showPreview = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            PreviewScreen(
+                url = previewUrl,
+                onClose = { showPreview = false }
+            )
         }
     }
 }
@@ -424,6 +463,8 @@ private fun ChatInputBar(
     selectedProvider: ProviderConfig?,
     selectedModelId: String?,
     effortLevel: String,
+    devServerUrl: String?,
+    isStartingDevServer: Boolean,
     onTextChanged: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -431,6 +472,8 @@ private fun ChatInputBar(
     onOpenModelPicker: () -> Unit,
     onAddProvider: () -> Unit,
     onSelectEffort: (String) -> Unit,
+    onOpenPreview: () -> Unit,
+    onCompileAndPreview: () -> Unit,
     enabled: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -440,6 +483,45 @@ private fun ChatInputBar(
         tonalElevation = 2.dp
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            OutlinedButton(
+                onClick = onCompileAndPreview,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Compilar + Preview")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (isStartingDevServer || devServerUrl != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ComposerControlChip(
+                        label = if (isStartingDevServer) {
+                            "Iniciando npm run dev..."
+                        } else {
+                            "Dev server activo"
+                        },
+                        enabled = false,
+                        onClick = {}
+                    )
+                    FilledIconButton(
+                        onClick = onOpenPreview,
+                        enabled = devServerUrl != null
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.OpenInBrowser,
+                            contentDescription = "Abrir preview"
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             Row(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)

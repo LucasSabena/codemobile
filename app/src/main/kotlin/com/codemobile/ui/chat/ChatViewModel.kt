@@ -24,6 +24,8 @@ import com.codemobile.core.model.ProviderConfig
 import com.codemobile.core.model.Session
 import com.codemobile.core.model.SessionMode
 import com.codemobile.terminal.TerminalBootstrap
+import com.codemobile.terminal.TerminalSession
+import com.codemobile.preview.DevServerDetector
 import org.json.JSONArray
 import org.json.JSONObject
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -36,6 +38,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
@@ -63,7 +66,10 @@ data class ChatUiState(
     val selectedFilePreview: ReadOnlyFilePreview? = null,
     val isLoadingInsights: Boolean = false,
     val isLoadingFilePreview: Boolean = false,
-    val insightsError: String? = null
+    val insightsError: String? = null,
+    val devServerUrl: String? = null,
+    val isStartingDevServer: Boolean = false,
+    val devServerError: String? = null
 )
 
 data class TokenUsage(val input: Int = 0, val output: Int = 0)
@@ -108,6 +114,12 @@ class ChatViewModel @Inject constructor(
     private var streamingJob: Job? = null
     private var messagesJob: Job? = null
     private var insightsJob: Job? = null
+    private var devServerSession: TerminalSession? = null
+    private var devServerOutputJob: Job? = null
+    private var devServerExitWatcherJob: Job? = null
+    private var devServerStartupTimeoutJob: Job? = null
+    private var recentDevServerOutput: String = ""
+    private var devServerFallbackTried: Boolean = false
 
     init {
         loadSession()
@@ -384,6 +396,11 @@ class ChatViewModel @Inject constructor(
                             ))
                         }
 
+                        maybeStartDevServerAfterToolCalls(
+                            project = state.project,
+                            toolCalls = pendingToolCalls
+                        )
+
                         // Rebuild conversation with tool results for next round
                         val assistantAIMsg = AIMessage(
                             role = AIRole.ASSISTANT,
@@ -533,10 +550,260 @@ class ChatViewModel @Inject constructor(
         _uiState.update { it.copy(insightsError = null) }
     }
 
+    fun onCompileAndPreview() {
+        val state = _uiState.value
+        val project = state.project ?: run {
+            _uiState.update { it.copy(error = "No hay proyecto activo para compilar") }
+            return
+        }
+
+        if (project.path.startsWith("content://")) {
+            _uiState.update {
+                it.copy(error = "Este proyecto usa content:// y no permite compilar con terminal")
+            }
+            return
+        }
+
+        val projectDir = File(project.path)
+        if (!projectDir.exists() || !projectDir.isDirectory) {
+            _uiState.update { it.copy(error = "El directorio del proyecto no existe") }
+            return
+        }
+
+        val packageJson = File(projectDir, "package.json")
+        if (!packageJson.exists()) {
+            _uiState.update {
+                it.copy(error = "No se encontró package.json. No se puede ejecutar npm run dev")
+            }
+            return
+        }
+
+        if (terminalBootstrap.getNativeBinaryPath("node") == null) {
+            if (fallbackToStaticPreview(projectDir)) {
+                _uiState.update {
+                    it.copy(
+                        error = "Preview estatico: esta build no incluye Node runtime"
+                    )
+                }
+            } else {
+                _uiState.update {
+                    it.copy(
+                        error = "Esta build no incluye Node runtime. Agrega libnode.so/libdash.so en app/src/main/jniLibs/arm64-v8a"
+                    )
+                }
+            }
+            return
+        }
+
+        startDevServerIfPossible(project)
+    }
+
+    private fun maybeStartDevServerAfterToolCalls(
+        project: Project?,
+        toolCalls: List<AIToolCall>
+    ) {
+        val currentProject = project ?: return
+        val touchedProjectFiles = toolCalls.any { toolCall ->
+            toolCall.name == AgentTools.WRITE_FILE ||
+                toolCall.name == AgentTools.EDIT_FILE ||
+                toolCall.name == AgentTools.DELETE_FILE ||
+                toolCall.name == AgentTools.RUN_COMMAND
+        }
+        if (!touchedProjectFiles) return
+
+        startDevServerIfPossible(currentProject)
+    }
+
+    private fun startDevServerIfPossible(project: Project) {
+        if (project.path.startsWith("content://")) return
+        if (devServerSession?.isRunning?.value == true) return
+
+        val projectDir = File(project.path)
+        val packageJson = File(projectDir, "package.json")
+        if (!projectDir.exists() || !projectDir.isDirectory || !packageJson.exists()) {
+            return
+        }
+
+        stopDevServer()
+
+        val envArray = terminalBootstrap.environment
+            .map { "${it.key}=${it.value}" }
+            .toTypedArray()
+
+        val newSession = TerminalSession(
+            shellCommand = terminalBootstrap.getShellCommand(),
+            workingDir = projectDir,
+            environment = envArray
+        )
+        newSession.start()
+        devServerSession = newSession
+        recentDevServerOutput = ""
+        devServerFallbackTried = false
+        _uiState.update {
+            it.copy(
+                devServerUrl = null,
+                isStartingDevServer = true,
+                devServerError = null
+            )
+        }
+
+        val devCommand = resolveDevCommand(packageJson) ?: "npm run dev"
+
+        devServerOutputJob = viewModelScope.launch {
+            newSession.output.collect { chunk ->
+                recentDevServerOutput = (recentDevServerOutput + chunk).takeLast(10_000)
+                val detectedUrl = DevServerDetector.detectUrl(recentDevServerOutput)
+                if (detectedUrl != null) {
+                    _uiState.update {
+                        it.copy(
+                            devServerUrl = detectedUrl,
+                            isStartingDevServer = false,
+                            devServerError = null
+                        )
+                    }
+                }
+
+                val lower = chunk.lowercase()
+                val npmMissing = "npm: inaccessible or not found" in lower ||
+                    "npm: not found" in lower ||
+                    "command not found" in lower
+                val nodeMissing = "node: inaccessible or not found" in lower ||
+                    "node: not found" in lower
+
+                if (_uiState.value.isStartingDevServer && npmMissing && !devServerFallbackTried) {
+                    devServerFallbackTried = true
+                    val hasNodeBinary = terminalBootstrap.getNativeBinaryPath("node") != null
+                    val hasServerJs = File(projectDir, "server.js").exists()
+                    if (hasNodeBinary && hasServerJs) {
+                        newSession.sendCommand("node server.js")
+                    } else if (fallbackToStaticPreview(projectDir)) {
+                        stopDevServer()
+                    } else {
+                        val message = "No hay runtime Node/NPM en Android y no existe index.html para preview estatico"
+                        _uiState.update {
+                            it.copy(
+                                isStartingDevServer = false,
+                                devServerError = message,
+                                error = message
+                            )
+                        }
+                    }
+                } else if (_uiState.value.isStartingDevServer && nodeMissing) {
+                    val message = "No hay runtime Node embebido en esta build. Agrega libnode.so/libdash.so en jniLibs/arm64-v8a"
+                    _uiState.update {
+                        it.copy(
+                            isStartingDevServer = false,
+                            devServerError = message,
+                            error = message
+                        )
+                    }
+                } else if (_uiState.value.isStartingDevServer && (
+                        "enoent" in lower ||
+                            "cannot find module" in lower ||
+                            "missing script: dev" in lower
+                        )
+                ) {
+                    val message = "No se pudo iniciar '$devCommand'. Revisa scripts.dev y dependencias"
+                    _uiState.update {
+                        it.copy(
+                            isStartingDevServer = false,
+                            devServerError = message,
+                            error = message
+                        )
+                    }
+                }
+            }
+        }
+
+        devServerExitWatcherJob = viewModelScope.launch {
+            newSession.exitCode.collect { code ->
+                if (code != null && _uiState.value.devServerUrl == null) {
+                    val tail = recentDevServerOutput
+                        .lines()
+                        .takeLast(3)
+                        .joinToString(" ")
+                        .trim()
+                    val detail = if (tail.isNotEmpty()) " - $tail" else ""
+                    _uiState.update {
+                        it.copy(
+                            isStartingDevServer = false,
+                            devServerError = "'$devCommand' finalizo con codigo $code$detail",
+                            error = "'$devCommand' finalizo con codigo $code"
+                        )
+                    }
+                }
+            }
+        }
+
+        devServerStartupTimeoutJob = viewModelScope.launch {
+            delay(20_000)
+            if (_uiState.value.isStartingDevServer && _uiState.value.devServerUrl == null) {
+                val tail = recentDevServerOutput
+                    .lines()
+                    .takeLast(3)
+                    .joinToString(" ")
+                    .trim()
+                val detail = if (tail.isNotEmpty()) "\nDetalle: $tail" else ""
+                val message = "El servidor no respondió en 20s ejecutando '$devCommand'.$detail"
+                _uiState.update {
+                    it.copy(
+                        isStartingDevServer = false,
+                        devServerError = message,
+                        error = message
+                    )
+                }
+            }
+        }
+
+        newSession.sendCommand(devCommand)
+    }
+
+    private fun fallbackToStaticPreview(projectDir: File): Boolean {
+        val previewFile = File(projectDir, "preview-static.html")
+            .takeIf { it.exists() }
+            ?: File(projectDir, "index.html").takeIf { it.exists() }
+            ?: return false
+
+        _uiState.update {
+            it.copy(
+                devServerUrl = previewFile.toURI().toString(),
+                isStartingDevServer = false,
+                devServerError = null
+            )
+        }
+        return true
+    }
+
+    private fun resolveDevCommand(packageJson: File): String? {
+        return runCatching {
+            val json = JSONObject(packageJson.readText())
+            json.optJSONObject("scripts")
+                ?.optString("dev")
+                ?.takeIf { it.isNotBlank() }
+        }.getOrNull()
+    }
+
+    private fun stopDevServer() {
+        devServerOutputJob?.cancel()
+        devServerExitWatcherJob?.cancel()
+        devServerStartupTimeoutJob?.cancel()
+        devServerSession?.destroy()
+        devServerOutputJob = null
+        devServerExitWatcherJob = null
+        devServerStartupTimeoutJob = null
+        devServerSession = null
+    }
+
+    override fun onCleared() {
+        stopDevServer()
+        super.onCleared()
+    }
+
     fun switchSession(newSessionId: String) {
         viewModelScope.launch {
             val session = sessionRepository.getById(newSessionId) ?: return@launch
             val project = projectRepository.getById(session.projectId)
+            stopDevServer()
 
             _uiState.update {
                 it.copy(
@@ -546,7 +813,10 @@ class ChatViewModel @Inject constructor(
                     noSession = false,
                     messages = emptyList(),
                     selectedFilePath = null,
-                    selectedFilePreview = null
+                    selectedFilePreview = null,
+                    devServerUrl = null,
+                    isStartingDevServer = false,
+                    devServerError = null
                 )
             }
 
