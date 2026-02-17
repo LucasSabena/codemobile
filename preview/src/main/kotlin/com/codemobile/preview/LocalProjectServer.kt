@@ -83,15 +83,6 @@ class LocalProjectServer(
     override fun serve(session: IHTTPSession): Response {
         var uri = session.uri?.trimStart('/') ?: ""
 
-        // Virtual endpoint: Service Worker for JSX/TSX transpilation
-        if (uri == "__preview_sw.js") {
-            return newFixedLengthResponse(
-                Response.Status.OK,
-                "application/javascript",
-                SERVICE_WORKER_CODE
-            )
-        }
-
         // Default to index.html for root
         if (uri.isBlank()) uri = "index.html"
 
@@ -104,7 +95,7 @@ class LocalProjectServer(
             )
         }
 
-        // Framework project: serve transformed index with SW bootstrap + importmap
+        // Framework project: serve transformed index with inline Babel + module loader
         if (uri == "index.html" && needsBuild) {
             return try {
                 serveTransformedIndex()
@@ -117,7 +108,14 @@ class LocalProjectServer(
         val resolvedUri = if (serveSubDir.isNotBlank()) "$serveSubDir/$uri" else uri
 
         return try {
-            val response = if (isSaf) serveSaf(resolvedUri) else serveLocal(resolvedUri)
+            var response = if (isSaf) serveSaf(resolvedUri) else serveLocal(resolvedUri)
+
+            // Extension resolution: if not found, try .jsx/.tsx/.js/.ts
+            if (response.status == Response.Status.NOT_FOUND) {
+                val resolved = tryResolveWithExtensions(resolvedUri)
+                if (resolved != null) response = resolved
+            }
+
             // SPA fallback: if file not found and it doesn't look like a static asset,
             // serve index.html for client-side routing (React Router, Vue Router, etc.)
             if (response.status == Response.Status.NOT_FOUND && !looksLikeAsset(uri)) {
@@ -135,10 +133,21 @@ class LocalProjectServer(
         }
     }
 
-    /** Returns true if the URI looks like a request for a static asset (has a file extension) */
-    private fun looksLikeAsset(uri: String): Boolean {
-        val lastSegment = uri.substringAfterLast('/')
-        return lastSegment.contains('.')
+    /**
+     * Try resolving a URI by appending common JS extensions.
+     * Handles imports like './App' → './App.jsx'
+     */
+    private fun tryResolveWithExtensions(uri: String): Response? {
+        val extensions = listOf(".jsx", ".tsx", ".js", ".ts", ".mjs")
+        val indexSuffixes = listOf("/index.jsx", "/index.tsx", "/index.js", "/index.ts")
+        val hasKnownExt = extensions.any { uri.endsWith(it) } || uri.endsWith(".html") || uri.endsWith(".css")
+        if (hasKnownExt) return null
+        for (ext in extensions + indexSuffixes) {
+            val tryUri = "$uri$ext"
+            val response = if (isSaf) serveSaf(tryUri) else serveLocal(tryUri)
+            if (response.status == Response.Status.OK) return response
+        }
+        return null
     }
 
     // ── Serve-root detection (local) ──────────────────────────────
@@ -498,11 +507,12 @@ class LocalProjectServer(
         }
     }
 
-    // ── Framework preview (Service Worker transpilation) ─────────
+    // ── Framework preview (inline Babel transpilation) ─────────
 
     /**
-     * Serve a transformed index.html that bootstraps a Babel Service Worker
-     * and import maps so React/Vue/etc. projects work without npm build.
+     * Serve a transformed index.html that loads Babel standalone from CDN
+     * and uses a custom module loader to transpile JSX/TSX in the browser.
+     * No Service Worker needed — everything runs in the main thread.
      */
     private fun serveTransformedIndex(): Response {
         val originalHtml = readProjectFile("index.html")
@@ -525,29 +535,30 @@ class LocalProjectServer(
     ): String {
         var html = originalHtml
 
-        // Inject importmap before </head> or before first <script>
-        val importMapTag = "<script type=\"importmap\">$importMapJson</script>"
+        // Inject importmap + Babel CDN before </head> or before first <script>
+        val headInject = """<script type="importmap">$importMapJson</script>
+<script src="https://esm.sh/@babel/standalone"></script>"""
         html = when {
             html.contains("</head>") ->
-                html.replace("</head>", "$importMapTag\n</head>")
+                html.replace("</head>", "$headInject\n</head>")
             html.contains("<script") ->
-                html.replaceFirst("<script", "$importMapTag\n<script")
-            else -> "$importMapTag\n$html"
+                html.replaceFirst("<script", "$headInject\n<script")
+            else -> "$headInject\n$html"
         }
 
-        // Find <script type="module" src="..."> and replace with SW bootstrap
+        // Find <script type="module" src="..."> and replace with module loader
         val scriptRegex = Regex("""<script\s+type=["']module["']\s+src=["']([^"']+)["'][^>]*>\s*</script>""")
         val match = scriptRegex.find(html)
 
         if (match != null) {
             val entrySrc = match.groupValues[1]
-            html = html.replace(match.value, generateBootstrapScript(entrySrc))
+            html = html.replace(match.value, generateModuleLoaderScript(entrySrc))
         } else if (detectedEntry != null) {
-            val bootstrapScript = generateBootstrapScript("/$detectedEntry")
+            val loaderScript = generateModuleLoaderScript("/$detectedEntry")
             html = if (html.contains("</body>")) {
-                html.replace("</body>", "$bootstrapScript\n</body>")
+                html.replace("</body>", "$loaderScript\n</body>")
             } else {
-                "$html\n$bootstrapScript"
+                "$html\n$loaderScript"
             }
         }
 
@@ -563,47 +574,27 @@ class LocalProjectServer(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Preview</title>
   <script type="importmap">$importMapJson</script>
+  <script src="https://esm.sh/@babel/standalone"></script>
 </head>
 <body>
   <div id="root"></div>
   <div id="app"></div>
-  ${generateBootstrapScript("/$entry")}
+  ${generateModuleLoaderScript("/$entry")}
 </body>
 </html>""".trimIndent()
     }
 
-    private fun generateBootstrapScript(entrySrc: String): String {
-        return """<script>
-(function() {
-  if (!('serviceWorker' in navigator)) {
-    document.body.innerHTML = '<p style="color:#ef4444;padding:20px">Service Workers no soportados</p>';
-    return;
-  }
-  var ld = document.createElement('div');
-  ld.id = '__pload';
-  ld.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0f0f0f;color:#888;font-family:system-ui;z-index:99999';
-  ld.innerHTML = '<div style="text-align:center"><div style="margin-bottom:12px;font-size:28px">⚡</div><div>Transpilando proyecto...</div><div style="margin-top:8px;font-size:12px;color:#555">Cargando Babel + dependencias desde CDN</div></div>';
-  document.body.appendChild(ld);
-  navigator.serviceWorker.register('/__preview_sw.js', {scope:'/'}).then(function(reg) {
-    if (navigator.serviceWorker.controller) { go(); return; }
-    var sw = reg.installing || reg.waiting || reg.active;
-    if (!sw) return;
-    if (sw.state === 'activated') { go(); return; }
-    sw.addEventListener('statechange', function() { if (sw.state === 'activated') go(); });
-  }).catch(function(err) {
-    ld.innerHTML = '<div style="text-align:center;color:#ef4444;padding:20px"><div style="margin-bottom:8px;font-size:18px">Error</div><div style="font-size:13px">' + err.message + '</div></div>';
-  });
-  function go() {
-    var el = document.getElementById('__pload');
-    if (el) el.remove();
-    var s = document.createElement('script');
-    s.type = 'module';
-    s.src = '$entrySrc';
-    s.onerror = function(e) { console.error('Entry load failed:', e); };
-    document.body.appendChild(s);
-  }
-})();
-</script>"""
+    /**
+     * Generate the inline module loader script.
+     */
+    private fun generateModuleLoaderScript(entrySrc: String): String {
+        return MODULE_LOADER_TEMPLATE.replace("__ENTRY__", entrySrc)
+    }
+
+    /** Returns true if the URI looks like a request for a static asset (has a file extension) */
+    private fun looksLikeAsset(uri: String): Boolean {
+        val lastSegment = uri.substringAfterLast('/')
+        return lastSegment.contains('.')
     }
 
     /**
@@ -684,134 +675,160 @@ class LocalProjectServer(
         private const val MIME_PLAINTEXT = "text/plain"
 
         /**
-         * Service Worker JavaScript that intercepts fetch requests and:
-         * - Transforms .jsx/.tsx/.ts files using Babel standalone (loaded from CDN)
-         * - Converts CSS imports into JS that injects <style> tags
-         * - Handles asset imports (SVG, images) as URL exports
-         * - Resolves extensionless imports by trying .jsx/.tsx/.js/.ts
-         * - Replaces import.meta.env with development defaults
+         * Inline module loader that runs in the main thread.
+         * Loads Babel standalone from CDN (already in a <script> tag),
+         * then recursively fetches, transforms, and bundles source files
+         * using Blob URLs. No Service Worker needed.
          */
-        private val SERVICE_WORKER_CODE = """
-importScripts('https://unpkg.com/@babel/standalone@7/babel.min.js');
+        private val MODULE_LOADER_TEMPLATE = """<script>
+(async function() {
+  var cache = {};
+  var loading = {};
 
-self.addEventListener('install', function(e) { self.skipWaiting(); });
-self.addEventListener('activate', function(e) { e.waitUntil(clients.claim()); });
-
-self.addEventListener('fetch', function(event) {
-  var url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith('/__')) return;
-
-  var lastSeg = url.pathname.split('/').pop() || '';
-  var ext = lastSeg.indexOf('.') !== -1 ? lastSeg.split('.').pop().toLowerCase() : '';
-
-  // Transform JSX/TSX/TS files
-  if (ext === 'jsx' || ext === 'tsx' || ext === 'ts') {
-    event.respondWith(handleTransform(event.request, url.pathname, ext));
-    return;
+  function dirname(p) {
+    var idx = p.lastIndexOf('/');
+    return idx > 0 ? p.substring(0, idx) : '';
   }
 
-  // CSS imported as JS module (not <link> stylesheets)
-  if (ext === 'css' && event.request.destination !== 'style') {
-    event.respondWith(handleCSS(event.request));
-    return;
+  function normPath(p) {
+    var parts = p.split('/');
+    var st = [];
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === '..') { if (st.length) st.pop(); }
+      else if (parts[i] && parts[i] !== '.') st.push(parts[i]);
+    }
+    return '/' + st.join('/');
   }
 
-  // Asset imports (SVG, images) imported from JS
-  if (['svg','png','jpg','jpeg','gif','webp','ico','avif','bmp'].indexOf(ext) !== -1
-      && event.request.destination === '') {
-    event.respondWith(
-      Promise.resolve(new Response('export default "' + url.pathname + '";', jsH()))
-    );
-    return;
-  }
+  async function loadMod(path) {
+    if (cache[path]) return cache[path];
+    if (loading[path]) return loading[path];
+    var rsv;
+    loading[path] = new Promise(function(r) { rsv = r; });
 
-  // Extensionless imports — try .jsx, .tsx, .js, .ts, /index.*
-  if (!ext && url.pathname !== '/' && event.request.destination === '') {
-    event.respondWith(handleNoExt(event.request, url));
-    return;
-  }
-});
+    var resp;
+    try { resp = await fetch(path); } catch(e) {
+      var b = mkBlob('console.error("[Preview] Network error:", ' + JSON.stringify(path) + ');');
+      done(path, b, rsv); return b;
+    }
+    if (!resp.ok) {
+      var b = mkBlob('console.error("[Preview] 404:", ' + JSON.stringify(path) + ');');
+      done(path, b, rsv); return b;
+    }
+    var code = await resp.text();
+    var segs = path.split('/');
+    var last = segs[segs.length - 1] || '';
+    var dotIdx = last.lastIndexOf('.');
+    var ext = dotIdx > 0 ? last.substring(dotIdx + 1).toLowerCase() : '';
+    var ctype = (resp.headers.get('content-type') || '').toLowerCase();
 
-function handleTransform(request, pathname, ext) {
-  return fetch(request).then(function(resp) {
-    if (!resp.ok) return resp;
-    return resp.text().then(function(code) {
-      return doTransform(code, pathname, ext);
-    });
-  }).catch(function(e) {
-    return errResp(pathname, e.message);
-  });
-}
+    // CSS -> inject as style tag
+    if (ext === 'css' || ctype.indexOf('text/css') !== -1) {
+      var js = 'var _s=document.createElement("style");_s.textContent=' + JSON.stringify(code) + ';document.head.appendChild(_s);export default undefined;';
+      var b = mkBlob(js);
+      done(path, b, rsv); return b;
+    }
 
-function handleCSS(request) {
-  return fetch(request).then(function(resp) {
-    if (!resp.ok) return new Response('export default "";', jsH());
-    return resp.text().then(function(css) {
-      var js = 'var __s=document.createElement("style");__s.textContent=' +
-               JSON.stringify(css) + ';document.head.appendChild(__s);export default undefined;';
-      return new Response(js, jsH());
-    });
-  }).catch(function() {
-    return new Response('export default "";', jsH());
-  });
-}
+    // Image/asset -> export URL
+    var assetExts = ['svg','png','jpg','jpeg','gif','webp','ico','avif','bmp','mp4','webm','woff','woff2','ttf','otf'];
+    if (assetExts.indexOf(ext) !== -1) {
+      var b = mkBlob('export default ' + JSON.stringify(path) + ';');
+      done(path, b, rsv); return b;
+    }
 
-function handleNoExt(request, url) {
-  var exts = ['.jsx','.tsx','.js','.ts'];
-  var idxs = ['/index.jsx','/index.tsx','/index.js','/index.ts'];
-  function tryList(list, i) {
-    if (i >= list.length) return null;
-    return fetch(url.pathname + list[i]).then(function(r) {
-      if (!r.ok) return tryList(list, i + 1);
-      var e2 = list[i].split('.').pop();
-      return r.text().then(function(code) { return doTransform(code, url.pathname + list[i], e2); });
-    }).catch(function() { return tryList(list, i + 1); });
-  }
-  return (tryList(exts, 0) || Promise.resolve(null)).then(function(r) {
-    if (r) return r;
-    return tryList(idxs, 0) || fetch(request);
-  }).then(function(r) {
-    return r || fetch(request);
-  });
-}
+    // JSON -> export default
+    if (ext === 'json' || ctype.indexOf('json') !== -1) {
+      try { JSON.parse(code); var b = mkBlob('export default ' + code + ';'); done(path, b, rsv); return b; }
+      catch(e) { /* not valid JSON, treat as JS */ }
+    }
 
-function doTransform(code, filename, ext) {
-  try {
-    // Replace Vite-specific env variables
+    // Replace Vite/CRA env vars
     code = code.replace(/import\.meta\.env\.(\w+)/g, function(m, k) {
       var d = {DEV:'true',PROD:'false',MODE:'"development"',BASE_URL:'"/"',SSR:'false'};
       return d[k] || 'undefined';
     });
-    code = code.replace(/import\.meta\.env/g,
-      '({DEV:true,PROD:false,MODE:"development",BASE_URL:"/",SSR:false})');
+    code = code.replace(/import\.meta\.env/g, '({DEV:true,PROD:false,MODE:"development",BASE_URL:"/",SSR:false})');
     code = code.replace(/import\.meta\.hot/g, 'undefined');
+    code = code.replace(/process\.env\.NODE_ENV/g, '"development"');
 
-    var presets = [];
-    if (ext === 'jsx' || ext === 'tsx') presets.push(['react', {runtime:'automatic'}]);
-    if (ext === 'tsx' || ext === 'ts') presets.push('typescript');
-    if (presets.length === 0) presets.push(['react', {runtime:'automatic'}]);
+    // Babel transform (handles JSX, TSX, TS, and plain JS)
+    if (window.Babel) {
+      try {
+        var presets = [['react', {runtime:'automatic'}], 'typescript'];
+        var result = Babel.transform(code, {presets:presets, filename:path, sourceType:'module'});
+        code = result.code;
+      } catch(e) {
+        console.error('[Preview] Babel error in ' + path + ':', e);
+      }
+    }
 
-    var result = Babel.transform(code, {
-      presets: presets,
-      filename: filename,
-      sourceType: 'module'
-    });
-    return new Response(result.code, jsH());
-  } catch(e) {
-    return errResp(filename, e.message);
+    // Collect local import specifiers (starting with ./ or ../)
+    var specs = {};
+    var re1 = /(?:from|import)\s*['"](\\.{1,2}\\/[^'"]*)['"]/g;
+    var re2 = /import\(\s*['"](\\.{1,2}\\/[^'"]*)['"]\s*\)/g;
+    var m;
+    while (m = re1.exec(code)) specs[m[1]] = 1;
+    while (m = re2.exec(code)) specs[m[1]] = 1;
+
+    // Resolve and load each local dependency
+    var baseDir = dirname(path);
+    var blobMap = {};
+    var specKeys = Object.keys(specs);
+    for (var i = 0; i < specKeys.length; i++) {
+      var sp = specKeys[i];
+      var abs = normPath(baseDir + '/' + sp);
+      blobMap[sp] = await loadMod(abs);
+    }
+
+    // Replace import specifiers with blob URLs
+    var keys = Object.keys(blobMap);
+    for (var i = 0; i < keys.length; i++) {
+      var sp = keys[i];
+      var blob = blobMap[sp];
+      code = code.split("'" + sp + "'").join("'" + blob + "'");
+      code = code.split('"' + sp + '"').join('"' + blob + '"');
+    }
+
+    var b = mkBlob(code);
+    done(path, b, rsv); return b;
   }
-}
 
-function jsH() { return {headers:{'Content-Type':'application/javascript;charset=utf-8'}}; }
+  function mkBlob(code) {
+    return URL.createObjectURL(new Blob([code], {type:'application/javascript'}));
+  }
 
-function errResp(file, msg) {
-  var js = 'console.error("[Preview] Error in ' + file.replace(/'/g,"\\'")
-         + ':", ' + JSON.stringify(msg || 'Unknown error') + ');\n'
-         + 'document.body.innerHTML += \'<pre style="color:#ef4444;background:#1a1a1a;padding:16px;margin:0;font-size:13px;white-space:pre-wrap">Error in ' + file + ':\\n' + (msg || '').replace(/'/g, "\\'"   ).replace(/\\/g, '\\\\').substring(0, 500) + '</pre>\';
-';
-  return new Response(js, jsH());
-}
-        """.trimIndent()
+  function done(path, blob, resolver) {
+    cache[path] = blob;
+    if (resolver) resolver(blob);
+  }
+
+  function waitBabel() {
+    return new Promise(function(r) {
+      if (window.Babel) return r();
+      var iv = setInterval(function() { if (window.Babel) { clearInterval(iv); r(); } }, 50);
+      setTimeout(function() { clearInterval(iv); r(); }, 30000);
+    });
+  }
+
+  var ld = document.createElement('div');
+  ld.id = '__pld';
+  ld.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0f0f0f;z-index:99999;color:#888;font-family:system-ui';
+  ld.innerHTML = '<div style="text-align:center"><div style="font-size:28px;margin-bottom:12px">\u26A1</div><div id="__pmsg">Cargando Babel...</div><div style="margin-top:8px;font-size:12px;color:#555">Descargando transpiler desde CDN</div></div>';
+  document.body.appendChild(ld);
+
+  try {
+    await waitBabel();
+    var msg = document.getElementById('__pmsg');
+    if (msg) msg.textContent = 'Transpilando modulos...';
+    var entryBlob = await loadMod('__ENTRY__');
+    ld.remove();
+    await import(entryBlob);
+  } catch(e) {
+    var h = (e.message || 'Error desconocido').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    ld.innerHTML = '<div style="text-align:center;color:#ef4444;padding:20px;max-width:350px"><div style="font-size:18px;margin-bottom:8px">Error</div><div style="font-size:13px;word-break:break-all">' + h + '</div></div>';
+    console.error('[Preview]', e);
+  }
+})();
+</script>"""
     }
 }

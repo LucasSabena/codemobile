@@ -161,7 +161,7 @@ fun PreviewScreen(
                         )
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
-                        settings.databaseEnabled = true          // Required for Service Workers
+                        settings.databaseEnabled = true
                         settings.allowContentAccess = true
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                         settings.allowFileAccess = false
@@ -170,16 +170,7 @@ fun PreviewScreen(
                         settings.displayZoomControls = false
                         settings.loadWithOverviewMode = true
                         settings.useWideViewPort = true
-                        settings.cacheMode = WebSettings.LOAD_DEFAULT   // Cache CDN resources
-
-                        // Enable Service Worker API (required for JSX transpilation)
-                        android.webkit.ServiceWorkerController.getInstance().let { swController ->
-                            swController.setServiceWorkerClient(object : android.webkit.ServiceWorkerClient() {
-                                override fun shouldInterceptRequest(request: android.webkit.WebResourceRequest?): android.webkit.WebResourceResponse? {
-                                    return null // Let all SW requests pass through normally
-                                }
-                            })
-                        }
+                        settings.cacheMode = WebSettings.LOAD_DEFAULT
 
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
