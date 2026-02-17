@@ -153,10 +153,12 @@ object GitHubCopilotAuth {
 
         return try {
             val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                val json = response.body?.string() ?: return null
-                gson.fromJson(json, DeviceCodeResponse::class.java)
-            } else null
+            response.use { resp ->
+                if (resp.isSuccessful) {
+                    val json = resp.body?.string() ?: return@use null
+                    gson.fromJson(json, DeviceCodeResponse::class.java)
+                } else null
+            }
         } catch (e: Exception) {
             null
         }
@@ -177,8 +179,10 @@ object GitHubCopilotAuth {
 
         return try {
             val response = client.newCall(request).execute()
-            val json = response.body?.string() ?: return null
-            gson.fromJson(json, TokenResponse::class.java)
+            response.use { resp ->
+                val json = resp.body?.string() ?: return@use null
+                gson.fromJson(json, TokenResponse::class.java)
+            }
         } catch (e: Exception) {
             null
         }

@@ -6,6 +6,7 @@ import com.codemobile.ai.model.AIModel
 import com.codemobile.ai.model.AIStreamEvent
 import com.codemobile.ai.model.AITool
 import com.codemobile.ai.model.AIToolCall
+import com.codemobile.ai.streaming.SSE_ERROR_PREFIX
 import com.codemobile.ai.streaming.streamSSE
 import com.google.gson.Gson
 import com.google.gson.JsonParser
@@ -27,12 +28,14 @@ import java.util.concurrent.atomic.AtomicReference
 class ClaudeProvider(
     override val id: String,
     override val name: String,
-    private val apiKey: String
+    private val apiKey: String,
+    private val baseUrl: String = "https://api.anthropic.com/v1",
+    private val extraHeaders: Map<String, String> = emptyMap(),
+    private val skipValidation: Boolean = false
 ) : AIProvider {
 
     private val gson = Gson()
     private val currentCall = AtomicReference<okhttp3.Call?>(null)
-    private val baseUrl = "https://api.anthropic.com/v1"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -52,6 +55,7 @@ class ClaudeProvider(
             .header("x-api-key", apiKey)
             .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json")
+            .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
             .post(body.toRequestBody("application/json".toMediaType()))
             .build()
 
@@ -63,8 +67,20 @@ class ClaudeProvider(
             .map<String?, AIStreamEvent> { data ->
                 if (data == null) return@map AIStreamEvent.Done
 
-                val json = JsonParser.parseString(data).asJsonObject
+                // Handle SSE-level error payloads from the streaming layer
+                if (data.startsWith(SSE_ERROR_PREFIX)) {
+                    return@map AIStreamEvent.Error(data.removePrefix(SSE_ERROR_PREFIX).trim())
+                }
+
+                android.util.Log.d("ClaudeSSE", "Raw: ${data.take(300)}")
+
+                val json = try {
+                    JsonParser.parseString(data).asJsonObject
+                } catch (e: Exception) {
+                    return@map AIStreamEvent.Error("Invalid JSON from API: ${data.take(200)}")
+                }
                 val type = json.get("type")?.asString ?: ""
+                android.util.Log.d("ClaudeSSE", "Event type=$type")
 
                 when (type) {
                     "message_start" -> {
@@ -93,10 +109,22 @@ class ClaudeProvider(
                         val index = json.get("index")?.asInt ?: 0
                         val delta = json.getAsJsonObject("delta")
                         val deltaType = delta?.get("type")?.asString
+                        android.util.Log.d("ClaudeSSE", "Delta type=$deltaType")
 
                         when (deltaType) {
                             "text_delta" -> {
-                                AIStreamEvent.TextDelta(delta.get("text")?.asString ?: "")
+                                val text = delta.get("text")?.asString ?: ""
+                                // Kimi may also include reasoning_content alongside text
+                                android.util.Log.d("ClaudeSSE", "text_delta: '${text.take(80)}'")
+                                AIStreamEvent.TextDelta(text)
+                            }
+
+                            // Kimi / DeepSeek thinking models send reasoning as thinking_delta
+                            "thinking_delta" -> {
+                                val thinking = delta.get("thinking")?.asString ?: ""
+                                android.util.Log.d("ClaudeSSE", "thinking_delta: '${thinking.take(80)}'")
+                                // Skip thinking content — only show final answer
+                                AIStreamEvent.TextDelta("")
                             }
 
                             "input_json_delta" -> {
@@ -110,7 +138,14 @@ class ClaudeProvider(
                                 )
                             }
 
-                            else -> AIStreamEvent.TextDelta("")
+                            else -> {
+                                // Fallback: try to extract text from any field in delta
+                                val fallbackText = delta?.get("text")?.asString
+                                    ?: delta?.get("reasoning_content")?.asString
+                                    ?: ""
+                                android.util.Log.d("ClaudeSSE", "Unknown delta '$deltaType', fallback='${fallbackText.take(80)}'")
+                                AIStreamEvent.TextDelta(fallbackText)
+                            }
                         }
                     }
 
@@ -147,7 +182,15 @@ class ClaudeProvider(
                 }
             }
             .catch { e ->
-                emit(AIStreamEvent.Error(e.message ?: "Unknown error"))
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                emit(AIStreamEvent.Error(e.message ?: "Unknown streaming error"))
+            }
+            .onCompletion { cause ->
+                // Ensure Done is always emitted when the stream ends.
+                // Kimi's Anthropic endpoint may not send message_stop.
+                if (cause == null) {
+                    emit(AIStreamEvent.Done)
+                }
             }
     }
 
@@ -171,15 +214,17 @@ class ClaudeProvider(
                     )
                 )
             )
+            if (skipValidation) return true
             val request = Request.Builder()
                 .url("$baseUrl/messages")
                 .header("x-api-key", apiKey)
                 .header("anthropic-version", "2023-06-01")
                 .header("Content-Type", "application/json")
+                .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
             val response = client.newCall(request).execute()
-            response.isSuccessful
+            response.use { it.isSuccessful }
         } catch (e: Exception) {
             false
         }

@@ -239,16 +239,23 @@ class DrawerViewModel @Inject constructor(
     // ── Git clone ─────────────────────────────────────────────
 
     /** Clone a repository from the given URL */
-    fun cloneRepo(repoUrl: String, customName: String? = null) {
+    fun cloneRepo(repoUrl: String, destinationPath: String? = null, customName: String? = null) {
         val normalizedUrl = gitCloneManager.normalizeGitUrl(repoUrl)
         val repoName = customName
             ?: gitCloneManager.extractRepoName(normalizedUrl)
             ?: "project"
+        
+        // Use user selected path or default
+        val targetDir = if (destinationPath != null) {
+            destinationPath
+        } else {
+            gitCloneManager.projectsDir
+        }
 
         viewModelScope.launch {
             gitCloneManager.clone(
                 repoUrl = normalizedUrl,
-                destinationDir = gitCloneManager.projectsDir,
+                destinationDir = targetDir,
                 repoName = repoName
             ).collect { event ->
                 when (event) {
