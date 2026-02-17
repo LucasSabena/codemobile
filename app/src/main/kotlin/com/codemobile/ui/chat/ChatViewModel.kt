@@ -836,10 +836,13 @@ class ChatViewModel @Inject constructor(
             // Hide preview (keep server running for quick re-open)
             _uiState.update { it.copy(showPreview = false) }
         } else {
-            // Show preview — start server if not running
+            // Show preview — (re)start server if needed or project changed
             val projectPath = current.project?.path
-            if (projectPath != null && !previewManager.isRunning()) {
-                previewManager.startStaticServer(projectPath)
+            if (projectPath != null) {
+                val runningForDifferentProject = previewManager.state.value.projectPath != projectPath
+                if (!previewManager.isRunning() || runningForDifferentProject) {
+                    previewManager.startStaticServer(projectPath)
+                }
             }
             _uiState.update {
                 it.copy(
